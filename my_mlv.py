@@ -163,7 +163,7 @@ class MLV(object):
                            cube_res,
                            scale_factors,
                            depth_clip=20.0):
-    """Predict lighting volumes from MPI.
+    """Predict lighting volumes from volume of pointcloud.
 
     Args:
       mpi: input mpi
@@ -329,14 +329,14 @@ class MLV(object):
 
     with tf.name_scope('input_data'):
 
-      # tgt_image = inputs['tgt_image']
+      tgt_image = inputs['tgt_image']
       ref_image = inputs['ref_image']
       src_images = inputs['src_images']
       env_image = inputs['env_image']
 
       ref_depth = inputs['ref_depth']
 
-      # tgt_pose = inputs['tgt_pose']
+      tgt_pose = inputs['tgt_pose']
       ref_pose = inputs['ref_pose']
       src_poses = inputs['src_poses']
       env_pose = inputs['env_pose']
@@ -345,34 +345,33 @@ class MLV(object):
 
       _, _, _, num_source = src_poses.get_shape().as_list()
 
-    # with tf.name_scope('inference'):
-    #   num_mpi_planes = tf.shape(mpi_planes)[0]
-    #   pred = self.infer_mpi(src_images, ref_image, ref_pose, src_poses,
-    #                         intrinsics, psv_planes)
-    #   rgba_layers = pred['rgba_layers']
-    #   psv = pred['psv']
+    with tf.name_scope('inference'):
+      num_mpi_planes = tf.shape(mpi_planes)[0]
+      pred = self.infer_mpi(src_images, ref_image, ref_pose, src_poses,
+                            intrinsics, psv_planes)
+      rgba_layers = pred['rgba_layers']
+      psv = pred['psv']
 
-    # with tf.name_scope('synthesis'):
-    #   mpi_gt = self.img2mpi(ref_image, ref_depth, mpi_planes)
-      # output_image, output_alpha_acc, _ = self.mpi_render_view(
-      #     mpi_gt, ref_pose, tgt_pose, mpi_planes, intrinsics)
+    with tf.name_scope('synthesis'):
+      output_image, output_alpha_acc, _ = self.mpi_render_view(
+          rgba_layers, ref_pose, tgt_pose, mpi_planes, intrinsics)
     with tf.name_scope('environment_rendering'):
       mpi_gt = self.img2mpi(ref_image, ref_depth, mpi_planes)
-      # output_image_gt, _, _ = self.mpi_render_view(mpi_gt, ref_pose, tgt_pose,
-      #                                              mpi_planes, intrinsics)
+      output_image_gt, _, _ = self.mpi_render_view(mpi_gt, ref_pose, tgt_pose,
+                                                   mpi_planes, intrinsics)
 
-      # lightvols_gt, _, _, _, _ = self.predict_lighting_vol(
-      #     mpi_gt,
-      #     mpi_planes,
-      #     intrinsics,
-      #     cube_res,
-      #     scale_factors,
-      #     depth_clip=depth_clip)
+      lightvols_gt, _, _, _, _ = self.predict_lighting_vol(
+          mpi_gt,
+          mpi_planes,
+          intrinsics,
+          cube_res,
+          scale_factors,
+          depth_clip=depth_clip)
 
       lightvols, lightvol_centers, \
       lightvol_side_lengths, \
       cube_rel_shapes, \
-      cube_nest_inds = self.predict_lighting_vol(mpi_gt, mpi_planes,
+      cube_nest_inds = self.predict_lighting_vol(rgba_layers, mpi_planes,
                                                  intrinsics, cube_res,
                                                  scale_factors,
                                                  depth_clip=depth_clip)
@@ -380,7 +379,7 @@ class MLV(object):
       lightvols_out = nets.cube_net_multires(lightvols, cube_rel_shapes,
                                              cube_nest_inds)
 
-      gt_envmap, gt_shells = self.render_envmap(lightvols, lightvol_centers,
+      gt_envmap, gt_shells = self.render_envmap(lightvols_gt, lightvol_centers,
                                                 lightvol_side_lengths,
                                                 cube_rel_shapes, cube_nest_inds,
                                                 ref_pose, env_pose, theta_res,
@@ -397,12 +396,12 @@ class MLV(object):
 
     with tf.name_scope('loss'):
       # mask loss for pixels outside reference frustum
-      # loss_mask = tf.where(
-      #     tf.equal(output_alpha_acc[Ellipsis, tf.newaxis], 0.0),
-      #     tf.zeros_like(output_image[:, :, :, 0:1]),
-      #     tf.ones_like(output_image[:, :, :, 0:1]))
-      # loss_mask = tf.stop_gradient(loss_mask)
-      # tf.summary.image('loss_mask', loss_mask)
+      loss_mask = tf.where(
+          tf.equal(output_alpha_acc[Ellipsis, tf.newaxis], 0.0),
+          tf.zeros_like(output_image[:, :, :, 0:1]),
+          tf.ones_like(output_image[:, :, :, 0:1]))
+      loss_mask = tf.stop_gradient(loss_mask)
+      tf.summary.image('loss_mask', loss_mask)
 
       # helper functions for loss
       def compute_error(real, fake, mask):
@@ -435,9 +434,9 @@ class MLV(object):
         return total_loss
 
       # rendered image loss
-      # render_loss = vgg_loss(tgt_image, output_image, loss_mask,
-      #                        vgg_model_weights) / 100.0
-      # total_loss = render_loss
+      render_loss = vgg_loss(tgt_image, output_image, loss_mask,
+                             vgg_model_weights) / 100.0
+      total_loss = render_loss
 
       # rendered envmap loss
       envmap_loss = vgg_loss(env_image, output_envmap[Ellipsis, :3],
@@ -447,7 +446,7 @@ class MLV(object):
       # set envmap loss to 0 when only training mpi network (see paper)
       envmap_loss = tf.where(tf.greater(global_step, 240000), envmap_loss, 0.0)
 
-      total_loss = envmap_loss
+      total_loss += envmap_loss
 
       # adversarial loss for envmap
       real_logit = nets.discriminator(env_image, scope='discriminator')
@@ -527,7 +526,7 @@ class MLV(object):
         tf.summary.image('envmap_level_' + str(i), i_envmap)
 
     tf.summary.scalar('loss_total', total_loss)
-    # tf.summary.scalar('loss_render', render_loss)
+    tf.summary.scalar('loss_render', render_loss)
     tf.summary.scalar('loss_envmap', envmap_loss)
     tf.summary.scalar('min_depth', min_depth)
     tf.summary.scalar('max_depth', max_depth)
@@ -543,10 +542,10 @@ class MLV(object):
       src_image = src_images[:, :, :, i * 3:(i + 1) * 3]
       tf.summary.image('image_src_%d' % i, src_image)
     # Output image
-    # tf.summary.image('image_output', output_image)
-    # tf.summary.image('image_output_Gt', output_image_gt)
+    tf.summary.image('image_output', output_image)
+    tf.summary.image('image_output_Gt', output_image_gt)
     # Target image
-    # tf.summary.image('image_tgt', tgt_image)
+    tf.summary.image('image_tgt', tgt_image)
     tf.summary.image('envmap_tgt', env_image)
     # Ref image
     tf.summary.image('image_ref', ref_image)
@@ -554,16 +553,16 @@ class MLV(object):
     num_summ = 8  # number of plane summaries to show in tensorboard
     for i in range(num_summ):
       ind = tf.to_int32(i * num_mpi_planes / num_summ)
-      rgb = mpi_gt[:, :, :, ind, :3]
-      alpha = mpi_gt[:, :, :, ind, -1:]
-      # ref_plane = psv[:, :, :, ind, :3]
-      # source_plane = psv[:, :, :, ind, 3:6]
+      rgb = rgba_layers[:, :, :, ind, :3]
+      alpha = rgba_layers[:, :, :, ind, -1:]
+      ref_plane = psv[:, :, :, ind, :3]
+      source_plane = psv[:, :, :, ind, 3:6]
       tf.summary.image('layer_rgb_%d' % i, rgb)
       tf.summary.image('layer_alpha_%d' % i, alpha)
-      tf.summary.image('layer_rgba_%d' % i, mpi_gt[:, :, :, ind, :])
-      # tf.summary.image('psv_avg_%d' % i, 0.5 * ref_plane + 0.5 * source_plane)
-      # tf.summary.image('psv_ref_%d' % i, ref_plane)
-      # tf.summary.image('psv_source_%d' % i, source_plane)
+      tf.summary.image('layer_rgba_%d' % i, rgba_layers[:, :, :, ind, :])
+      tf.summary.image('psv_avg_%d' % i, 0.5 * ref_plane + 0.5 * source_plane)
+      tf.summary.image('psv_ref_%d' % i, ref_plane)
+      tf.summary.image('psv_source_%d' % i, source_plane)
 
     return train_op
 
@@ -582,9 +581,7 @@ class MLV(object):
       global_step: training iteration placeholder
     """
 
-    config = tf.ConfigProto(
-        device_count = {'GPU': 0}
-    )
+    config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
 
     step_start = 1

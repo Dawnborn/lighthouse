@@ -46,34 +46,20 @@ def dataset_to_tensors(dataset, capacity, map_fn=None, parallelism=None):
       dataset = dataset.map(map_fn, num_parallel_calls=parallelism)
     return tf.contrib.data.get_single_element(dataset.batch(capacity))
 
-
-class ViewTrip(
-    collections.namedtuple('ViewTrip', [
+class ViewSix(
+    collections.namedtuple('ViewSix', [
         'scene_id', 'sequence_id', 'timestamp', 'rgb', 'pano', 'depth',
         'normal', 'mask', 'pose', 'intrinsics', 'resolution'
     ])):
-  """A class for handling a trip of views."""
-
-  def overlap_mask(self):
-    intrinsics = self.intrinsics * tf.constant([[1., 1., 1.], [1., -1., 1.],
-                                                [1., 1., 1.]])
-    mask1_in_2, mask2_in_1 = image_overlap(self.depth[0], self.pose[0],
-                                           self.depth[1], self.pose[1],
-                                           intrinsics)
-    masks = tf.stack([mask1_in_2, mask2_in_1], 0)
-    return ViewTrip(self.scene_id, self.sequence_id, self.timestamp, self.rgb,
-                    self.pano, self.depth, self.normal, masks, self.pose,
-                    self.intrinsics, self.resolution)
-
   def reverse(self):
     """Returns the reverse of the sequence."""
-    return ViewTrip(self.scene_id, self.sequence_id,
+    return ViewSix(self.scene_id, self.sequence_id,
                     tf.reverse(self.timestamp, [0]), tf.reverse(self.rgb, [0]),
                     tf.reverse(self.pano, [0]), tf.reverse(self.depth, [0]),
                     tf.reverse(self.normal, [0]), tf.reverse(self.mask, [0]),
                     tf.reverse(self.pose, [0]), self.intrinsics,
                     self.resolution)
-
+  
   def random_reverse(self):
     """Returns either the sequence or its reverse, with equal probability."""
     uniform_random = tf.random_uniform([], 0, 1.0)
@@ -84,7 +70,7 @@ class ViewTrip(
     """Returns either the sequence or its reverse, based on the sequence id."""
     return tf.cond(
         self.hash_in_range(2, 0, 1), lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
-
+  
   def hash_in_range(self, buckets, base, limit):
     """Return true if the hashing key falls in the range [base, limit)."""
     hash_bucket = tf.string_to_hash_bucket_fast(self.scene_id, buckets)
@@ -121,8 +107,8 @@ class ViewSequence(
                                       dtype=tf.int32)
     return self.subsequence(random_stride)
 
-  def generate_trips(self, min_gap=1, max_gap=5):
-    """Generate a tf Dataset of training triplets with an offset between three frames.
+  def generate_six(self, min_gap=1, max_gap=5):
+    """Generate a tf Dataset of training sixtuplets with an offset between custom frames.
 
     Args:
       min_gap: (int) the minimum offset between two frames of a sampled triplet.
@@ -133,88 +119,118 @@ class ViewSequence(
       triplets from the input sequence separated by the given offset.
     """
 
-    def mapper(timestamp_trips, rgb_trips, pano_trips, depth_trips,
+    def mapper_six(timestamp_trips, rgb_trips, pano_trips, depth_trips,
                normal_trips, pose_trips):
-      """A function mapping a data tuple to ViewTrip."""
-      return ViewTrip(self.scene_id, self.sequence_id, timestamp_trips,
+      """A function mapping a data tuple to ViewSix."""
+      return ViewSix(self.scene_id, self.sequence_id, timestamp_trips,
                       rgb_trips, pano_trips, depth_trips, normal_trips,
                       tf.zeros([1]), pose_trips, self.intrinsics[0],
                       self.resolution[0])
-
-    with tf.control_dependencies(
-        [tf.Assert(tf.less(max_gap, self.length()),
-                   [max_gap, self.length()])]):
+    
+    with tf.control_dependencies([tf.Assert(tf.less(max_gap, self.length()),[max_gap, self.length()])]):
       timestamp_trips = []
       rgb_trips = []
       pano_trips = []
       depth_trips = []
       normal_trips = []
       pose_trips = []
-      # generate triplets with an offset that ranges
-      # from 'min_gap' to 'max_gap'.
-      for stride in range(min_gap, max_gap + 1):
-        inds = tf.range(stride, self.length() - stride)
-        inds_jitter = tf.random.uniform(
+    
+    # generate custom sixtuples with an offset that ranges
+    # from 'min_gap' to 'max_gap'.
+
+    for stride in range(min_gap, max_gap+1):
+      inds = tf.range(stride, self.length() - stride)
+      inds_jitter = tf.random.uniform(
             minval=-40,
             maxval=40,
             shape=[self.length() - 2 * stride],
             dtype=tf.int32)
-        rand_inds = tf.minimum(
+      rand_inds = tf.minimum(
             tf.maximum(inds + inds_jitter, 0),
             self.length() - 1)
-        timestamp = tf.stack([
-            self.timestamp[:-2 * stride], self.timestamp[2 * stride:],
-            self.timestamp[stride:-stride],
+      
+      timestamp = tf.stack([
+            self.timestamp[:-5 * stride], 
+            self.timestamp[stride:-4*stride],
+            self.timestamp[2*stride:-3*stride],
+            self.timestamp[3*stride:-2*stride],
+            self.timestamp[4*stride:-1*stride],
+            self.timestamp[5 * stride:],
             tf.gather(self.timestamp, rand_inds)
         ],
                              axis=1)
-        rgb = tf.stack([
-            self.rgb[:-2 * stride], self.rgb[2 * stride:],
-            self.rgb[stride:-stride],
+      
+      rgb = tf.stack([
+            self.rgb[:-5 * stride], 
+            self.rgb[stride:-4*stride],
+            self.rgb[2*stride:-3*stride],
+            self.rgb[3*stride:-2*stride],
+            self.rgb[4*stride:-1*stride],
+            self.rgb[5 * stride:],
             tf.gather(self.rgb, rand_inds)
         ],
-                       axis=1)
-        pano = tf.stack([
-            self.pano[:-2 * stride], self.pano[2 * stride:],
-            self.pano[stride:-stride],
+                             axis=1)
+      
+      pano = tf.stack([
+            self.pano[:-5 * stride], 
+            self.pano[stride:-4*stride],
+            self.pano[2*stride:-3*stride],
+            self.pano[3*stride:-2*stride],
+            self.pano[4*stride:-1*stride],
+            self.pano[5 * stride:],
             tf.gather(self.pano, rand_inds)
         ],
-                        axis=1)
-        depth = tf.stack([
-            self.depth[:-2 * stride], self.depth[2 * stride:],
-            self.depth[stride:-stride],
+                             axis=1)
+      
+      depth = tf.stack([
+            self.depth[:-5 * stride], 
+            self.depth[stride:-4*stride],
+            self.depth[2*stride:-3*stride],
+            self.depth[3*stride:-2*stride],
+            self.depth[4*stride:-1*stride],
+            self.depth[5 * stride:],
             tf.gather(self.depth, rand_inds)
         ],
-                         axis=1)
-        normal = tf.stack([
-            self.normal[:-2 * stride], self.normal[2 * stride:],
-            self.normal[stride:-stride],
+                             axis=1)
+      
+      normal = tf.stack([
+            self.normal[:-5 * stride], 
+            self.normal[stride:-4*stride],
+            self.normal[2*stride:-3*stride],
+            self.normal[3*stride:-2*stride],
+            self.normal[4*stride:-1*stride],
+            self.normal[5 * stride:],
             tf.gather(self.normal, rand_inds)
         ],
-                          axis=1)
-        pose = tf.stack([
-            self.pose[:-2 * stride], self.pose[2 * stride:],
-            self.pose[stride:-stride],
+                             axis=1)
+
+      pose = tf.stack([
+            self.pose[:-5 * stride], 
+            self.pose[stride:-4*stride],
+            self.pose[2*stride:-3*stride],
+            self.pose[3*stride:-2*stride],
+            self.pose[4*stride:-1*stride],
+            self.pose[5 * stride:],
             tf.gather(self.pose, rand_inds)
         ],
-                        axis=1)
-        timestamp_trips.append(timestamp)
-        rgb_trips.append(rgb)
-        pano_trips.append(pano)
-        depth_trips.append(depth)
-        normal_trips.append(normal)
-        pose_trips.append(pose)
-
-      timestamp_trips = tf.concat(timestamp_trips, 0)
-      rgb_trips = tf.concat(rgb_trips, 0)
-      pano_trips = tf.concat(pano_trips, 0)
-      depth_trips = tf.concat(depth_trips, 0)
-      normal_trips = tf.concat(normal_trips, 0)
-      pose_trips = tf.concat(pose_trips, 0)
-      dataset = tf.data.Dataset.from_tensor_slices(
-          (timestamp_trips, rgb_trips, pano_trips, depth_trips, normal_trips,
-           pose_trips))
-      return dataset.map(mapper)
+                             axis=1)
+      timestamp_trips.append(timestamp)
+      rgb_trips.append(rgb)
+      pano_trips.append(pano)
+      depth_trips.append(depth)
+      normal_trips.append(normal)
+      pose_trips.append(pose)
+    
+    timestamp_trips = tf.concat(timestamp_trips, 0)
+    rgb_trips = tf.concat(rgb_trips, 0)
+    pano_trips = tf.concat(pano_trips, 0)
+    depth_trips = tf.concat(depth_trips, 0)
+    normal_trips = tf.concat(normal_trips, 0)
+    pose_trips = tf.concat(pose_trips, 0)
+    dataset = tf.data.Dataset.from_tensor_slices(
+        (timestamp_trips, rgb_trips, pano_trips, depth_trips, normal_trips,
+          pose_trips))
+    return dataset.map(mapper_six)
 
   def length(self):
     """Returns the length of the sequence."""
@@ -297,22 +313,17 @@ def lookat_matrix(up, lookat_direction):
   return lookat
 
 
-def load_sequence(sequence_dir, data_dir, parallelism=10, gt_dir=None):
+def load_sequence(sequence_dir, data_dir, parallelism=10):
   """Load a sequence."""
   n_timestamp = 1000
   v = tf.string_split([sequence_dir], '/').values
   scene_id, sequence_id = v[-2], v[-1]
-  if gt_dir:
-    camera_dir = gt_dir + scene_id + '/'
-  else:
-    camera_dir = data_dir + 'GroundTruth_HD1-HD6/' + scene_id + '/'
-  print(camera_dir)
+  camera_dir = data_dir + 'GroundTruth_HD1-HD6/' + scene_id + '/'
   trajectory_name = 'velocity_angular' + tf.strings.substr(v[-1], -4, -4) + '/'
   camera_dir = camera_dir + trajectory_name
   camera_timestamp_path = camera_dir + 'cam0.timestamp'
   timestamp, img_name = read_timestamp(camera_timestamp_path)
 
-  print(sequence_dir)
   rgb_paths = sequence_dir + '/cam0/data/' + img_name
   pano_paths = sequence_dir + '/cam0_pano/data/' + img_name
   depth_paths = sequence_dir + '/depth0/data/' + img_name
@@ -393,25 +404,8 @@ def load_image_data(trip):
     image.set_shape(shape)
     return image
 
-  def load_depth(filename, shape,intrinsics=[600,600,320,240]):
+  def load_depth(filename, shape):
     """Load the 16-bit png depth map in milimeters given the filename."""
-    def euclidean_ray_length_to_z_coordinate(depth_image, intrinsic):
-      center_x = intrinsic[2]
-      center_y = intrinsic[3]
-
-      constant_x = 1 / intrinsic[0]
-      constant_y = 1 / intrinsic[1]
-
-      vs = np.array(
-          [(v - center_x) * constant_x for v in range(0, depth_image.shape[1])])
-      us = np.array(
-          [(u - center_y) * constant_y for u in range(0, depth_image.shape[0])])
-
-      return (np.sqrt(
-          np.square(depth_image / 1000.0) /
-          (1 + np.square(vs[np.newaxis, :]) + np.square(us[:, np.newaxis]))) *
-              1000.0).astype(np.uint16)
-    # TODO: map back to normal depth
     depth = tf.image.decode_png(tf.read_file(filename), 3, tf.dtypes.uint16)
     depth = tf.cast(depth, tf.float32) / 1000
     depth.set_shape(shape)
@@ -448,20 +442,21 @@ def load_image_data(trip):
       lambda filename: load_surface_normal(filename, [480, 640, 3]),
       parallelism=4)
 
-  return ViewTrip(trip.scene_id, trip.sequence_id, trip.timestamp, rgb, pano,
+  return ViewSix(trip.scene_id, trip.sequence_id, trip.timestamp, rgb, pano,
                   depth, normal, trip.mask, trip.pose, trip.intrinsics,
                   trip.resolution)
 
 
-def small_translation_condition(trip, translation_threshold):
+def small_translation_condition_six(trip, translation_threshold):
   # trip.pose: [N, 3, 4]
   positions = trip.pose[:, :, -1]
   t_norm = tf.norm(positions[0] - positions[1], axis=-1)
-  return tf.greater(t_norm, translation_threshold)
+  for i in range(4):
+    t_norm += tf.norm(positions[i+1] - positions[i+2], axis=-1)
+  return tf.greater(t_norm, 5*translation_threshold)
 
-
-def too_close_condition(trip, depth_threshold=0.1):
-  depths = trip.depth[:3, :, :, 0]
+def too_close_condition_six(trip, depth_threshold=0.1):
+  depths = trip.depth[:6, :, :, 0]
   depthmax = tf.reduce_max(depths)
   depths = tf.where(
       tf.equal(depths, 0.0), depthmax * tf.ones_like(depths), depths)
@@ -471,7 +466,7 @@ def too_close_condition(trip, depth_threshold=0.1):
 def pano_forwards_condition(trip):
   """Checks if a pano is in a forward condition."""
   ref_pose = trip.pose[1, :, :]
-  pano_pose = trip.pose[3, :, :]
+  pano_pose = trip.pose[6, :, :]
   ref_twds = -1.0 * ref_pose[:, 2]
 
   # make sure max_depth>forward motion>median_depth
@@ -536,7 +531,7 @@ def prepare_training_set(
   dataset = dataset.map(
       lambda sequence: sequence.random_subsequence(min_stride, max_stride))
   dataset = dataset.flat_map(
-      lambda sequence: sequence.generate_trips(min_gap, max_gap))
+      lambda sequence: sequence.generate_six(min_gap, max_gap))
   dataset = dataset.shuffle(1000000).repeat(epochs)
   # filter small translations
   dataset = dataset.filter(
@@ -731,8 +726,7 @@ def data_loader(parent_dir='',
                 parallelism=20,
                 parallel_image_reads=100,
                 prefetch_buffer=20,
-                filter_envmap=True,
-                gt_dir=None):
+                filter_envmap=True):
   """Loads data."""
 
   datasets = collections.namedtuple('datasets',
@@ -758,7 +752,7 @@ def data_loader(parent_dir='',
       tf.data.experimental.ignore_errors())
 
   sequences = sequences.map(
-      lambda sequence_dir: load_sequence(sequence_dir, parent_dir, parallelism, gt_dir),
+      lambda sequence_dir: load_sequence(sequence_dir, parent_dir, parallelism),
       num_parallel_calls=parallelism)
 
   training = sequences.filter(
@@ -865,12 +859,15 @@ def format_inputs(s, height, width, env_height, env_width):
   ref_depths = s.depth[:, randrange[0], :, :, :]
   ref_depths = tf.where(
       tf.equal(ref_depths, 0.0),
-      tf.reduce_max(ref_depths) * tf.ones_like(ref_depths), ref_depths) # max_deoth for 0 depth
+      tf.reduce_max(ref_depths) * tf.ones_like(ref_depths), ref_depths)
   ref_depths = tf.nn.pool(
       ref_depths, window_shape=[3, 3], pooling_type='MAX', padding='SAME')
   batch['ref_depth'] = tf.image.resize_area(
       ref_depths, size=[height, width])[Ellipsis, 0]
 
+  batch['tgt_image'] = tf.image.resize_area(
+      s.rgb[:, randrange[1], :, :, :], size=[height, width])
+  batch['tgt_pose'] = format_pose(s.pose[:, randrange[1], :, :], do_flip=True)
 
   src_images = []
   src_poses = []

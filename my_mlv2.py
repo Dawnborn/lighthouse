@@ -28,46 +28,11 @@ import lighthouse.geometry.projector as pj
 import lighthouse.nets as nets
 
 
-class MLV(object):
+class MLV2(object):
   """Class definition for Multiscale Lighting Volume learning module."""
 
   def __init__(self):
     pass
-
-  def infer_mpi(self, src_images, ref_image, ref_pose, src_poses, intrinsics,
-                psv_planes):
-    """Construct the MPI inference graph.
-
-    Args:
-      src_images: stack of source images [batch, height, width, 3*#source]
-      ref_image: reference image [batch, height, width, 3]
-      ref_pose: reference frame pose (camera to world) [batch, 4, 4]
-      src_poses: source frame poses (camera to world) [batch, 4, 4, #source]
-      intrinsics: camera intrinsics [batch, 3, 3]
-      psv_planes: list of depth of PSV planes
-
-    Returns:
-      outputs: a collection of output tensors.
-    """
-
-    with tf.name_scope('format_network_input'):
-      net_input = self.format_network_input(ref_image, src_images, ref_pose,
-                                            src_poses, psv_planes, intrinsics)
-
-    with tf.name_scope('layer_prediction'):
-      # generate entire MPI (training and inference, but takes more memory)
-      rgba_layers = nets.mpi_net(net_input)
-
-    # Collect output tensors
-    pred = {}
-    pred['rgba_layers'] = rgba_layers
-    pred['psv'] = net_input
-
-    # add pred tensors to outputs collection
-    for i in pred:
-      tf.add_to_collection('outputs', pred[i])
-
-    return pred
 
   def mpi_render_view(self, input_mpi, ref_pose, tgt_pose, planes, intrinsics):
     """Render a target view from MPI representation.
@@ -582,9 +547,7 @@ class MLV(object):
       global_step: training iteration placeholder
     """
 
-    config = tf.ConfigProto(
-        device_count = {'GPU': 0}
-    )
+    config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
 
     step_start = 1

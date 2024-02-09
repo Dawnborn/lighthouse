@@ -27,6 +27,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
+from scipy.spatial.transform import rotation as R
+
 import lighthouse.geometry.projector as pj
 from lighthouse.mlv import MLV
 import lighthouse.nets as nets
@@ -111,6 +113,23 @@ def main(argv):
       [f for f in os.listdir(FLAGS.data_dir) if f.endswith(".npz")])
   print("found {:05d} input files".format(len(input_files)))
 
+  batch = {}
+  ref_image_path = "/home/wiss/lhao/junpeng/ws_lighthouse/data/setup_ptc/scene0370_02/pfm/bgr_2.pfm"
+  depth_path = "/home/wiss/lhao/junpeng/ws_lighthouse/data/setup_ptc/scene0370_02/depth/bgrdepth_2.png"
+  intrinsic = np.array([[577.8705679012345,0,320],[0,577.8705679012345,240],[0, 0, 1]])
+  # ref_pose
+  raw = np.load("/home/wiss/lhao/junpeng/ws_lighthouse/data/setup_ptc/scene0370_02/cam_poses0.txt")
+  ref_pose = raw[1]
+  t = raw[-3:]
+  q = raw[:4]
+  q = q[[1,2,3,0]]
+  Rot = R.from_quat(q)
+
+  batch["ref_image"] = cv2.imread(ref_image_path, cv2.IMREAD_UNCHANGED)
+  batch["ref_depth"] = cv2.imread(depth_path,cv2.CV_16UC1)/5000.0
+  batch["intrinsics"] = intrinsic
+  batch["ref_pose"] = 
+
   with tf.Session() as sess:
     saver = tf.train.Saver()
     saver.restore(sess, os.path.join(FLAGS.checkpoint_dir, "model.ckpt"))
@@ -119,7 +138,7 @@ def main(argv):
       print("running example:", i)
 
       # Load inputs
-      batch = np.load(FLAGS.data_dir + input_files[i])
+      # batch = np.load(FLAGS.data_dir + input_files[i])
 
       output_envmap_eval, = sess.run(
           [output_envmap],
@@ -137,6 +156,7 @@ def main(argv):
       plt.imsave(
           os.path.join(FLAGS.output_dir, "{:05d}.png".format(i)),
           output_envmap_eval[0, :, :, :3])
+    
 
 
 if __name__ == "__main__":

@@ -486,14 +486,17 @@ def render_mpi_homogs(mpi_rgba,
 
 
 def make_psv_homogs(img, pose, newpose, dispvals, num_depths, window=None):
-  """Create a plane sweep volume, vectorized on initial axes of img and pose."""
+  """
+    Create a plane sweep volume, vectorized on initial axes of img and pose.
+    return: cvd [H, W, D, 3, N] or [H, W, D, 3]
+  """
 
   with tf.variable_scope('make_cv_homogs'):
 
     H = plane_homogs(
         newpose,
         pose,
-        1. / dispvals,
+        1. / dispvals, # list of depths
         planes_from_t=True,
         y_flip=True,
         fix_yx=False)  # [N, D, 3, 3]

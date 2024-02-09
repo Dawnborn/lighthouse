@@ -26,19 +26,19 @@ from absl import flags
 import scipy.io as sio
 import tensorflow as tf
 
-import lighthouse.data_loader as loader
-from lighthouse.mlv import MLV
+import data_loader as loader
+from mlv import MLV
 
-flags.DEFINE_string("vgg_model_file", default="", help="VGG weights filename")
+flags.DEFINE_string("vgg_model_file", default="./lighthouse/model/imagenet-vgg-verydeep-19.mat", help="VGG weights filename")
 flags.DEFINE_string(
     "load_dir",
-    default="",
+    default="./lighthouse/model",
     help="Directory for loading checkpoint to continue training")
 flags.DEFINE_string(
-    "data_dir", default="", help="InteriorNet dataset directory")
+    "data_dir", default="../../../../../local/lhao/junpeng/interiornet_dataset/", help="InteriorNet dataset directory")
 flags.DEFINE_string(
     "experiment_dir",
-    default="",
+    default="./lighthouse/experiment_dir",
     help="Directory to store experiment summaries and checkpoints")
 
 FLAGS = flags.FLAGS
