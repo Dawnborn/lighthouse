@@ -27,9 +27,15 @@ import os
 import numpy as np
 import tensorflow as tf
 
+import cv2
+
+from scipy.spatial.transform import Rotation as R
+
+tmp_key = lambda x: float(x.split(".")[0].split("_")[-1])
+
 
 def dataset_to_tensors(dataset, capacity, map_fn=None, parallelism=None):
-  """Return a tensor with all elements of the dataset in one batch.
+    """Return a tensor with all elements of the dataset in one batch.
 
   Args:
     dataset: A Tensorflow dataset.
@@ -40,11 +46,11 @@ def dataset_to_tensors(dataset, capacity, map_fn=None, parallelism=None):
   Returns:
     A tensor containing all elements of the dataset in one batch.
   """
-  with tf.name_scope(None, 'dataset_to_tensors',
-                     [dataset, capacity, map_fn, parallelism]):
-    if map_fn is not None:
-      dataset = dataset.map(map_fn, num_parallel_calls=parallelism)
-    return tf.contrib.data.get_single_element(dataset.batch(capacity))
+    with tf.name_scope(None, 'dataset_to_tensors',
+                       [dataset, capacity, map_fn, parallelism]):
+        if map_fn is not None:
+            dataset = dataset.map(map_fn, num_parallel_calls=parallelism)
+        return tf.contrib.data.get_single_element(dataset.batch(capacity))
 
 
 class ViewTrip(
@@ -52,44 +58,44 @@ class ViewTrip(
         'scene_id', 'sequence_id', 'timestamp', 'rgb', 'pano', 'depth',
         'normal', 'mask', 'pose', 'intrinsics', 'resolution'
     ])):
-  """A class for handling a trip of views."""
+    """A class for handling a trip of views."""
 
-  def overlap_mask(self):
-    intrinsics = self.intrinsics * tf.constant([[1., 1., 1.], [1., -1., 1.],
-                                                [1., 1., 1.]])
-    mask1_in_2, mask2_in_1 = image_overlap(self.depth[0], self.pose[0],
-                                           self.depth[1], self.pose[1],
-                                           intrinsics)
-    masks = tf.stack([mask1_in_2, mask2_in_1], 0)
-    return ViewTrip(self.scene_id, self.sequence_id, self.timestamp, self.rgb,
-                    self.pano, self.depth, self.normal, masks, self.pose,
-                    self.intrinsics, self.resolution)
+    def overlap_mask(self):
+        intrinsics = self.intrinsics * tf.constant([[1., 1., 1.], [1., -1., 1.],
+                                                    [1., 1., 1.]])
+        mask1_in_2, mask2_in_1 = image_overlap(self.depth[0], self.pose[0],
+                                               self.depth[1], self.pose[1],
+                                               intrinsics)
+        masks = tf.stack([mask1_in_2, mask2_in_1], 0)
+        return ViewTrip(self.scene_id, self.sequence_id, self.timestamp, self.rgb,
+                        self.pano, self.depth, self.normal, masks, self.pose,
+                        self.intrinsics, self.resolution)
 
-  def reverse(self):
-    """Returns the reverse of the sequence."""
-    return ViewTrip(self.scene_id, self.sequence_id,
-                    tf.reverse(self.timestamp, [0]), tf.reverse(self.rgb, [0]),
-                    tf.reverse(self.pano, [0]), tf.reverse(self.depth, [0]),
-                    tf.reverse(self.normal, [0]), tf.reverse(self.mask, [0]),
-                    tf.reverse(self.pose, [0]), self.intrinsics,
-                    self.resolution)
+    def reverse(self):
+        """Returns the reverse of the sequence."""
+        return ViewTrip(self.scene_id, self.sequence_id,
+                        tf.reverse(self.timestamp, [0]), tf.reverse(self.rgb, [0]),
+                        tf.reverse(self.pano, [0]), tf.reverse(self.depth, [0]),
+                        tf.reverse(self.normal, [0]), tf.reverse(self.mask, [0]),
+                        tf.reverse(self.pose, [0]), self.intrinsics,
+                        self.resolution)
 
-  def random_reverse(self):
-    """Returns either the sequence or its reverse, with equal probability."""
-    uniform_random = tf.random_uniform([], 0, 1.0)
-    condition = tf.less(uniform_random, 0.5)
-    return tf.cond(condition, lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
+    def random_reverse(self):
+        """Returns either the sequence or its reverse, with equal probability."""
+        uniform_random = tf.random_uniform([], 0, 1.0)
+        condition = tf.less(uniform_random, 0.5)
+        return tf.cond(condition, lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
 
-  def deterministic_reverse(self):
-    """Returns either the sequence or its reverse, based on the sequence id."""
-    return tf.cond(
-        self.hash_in_range(2, 0, 1), lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
+    def deterministic_reverse(self):
+        """Returns either the sequence or its reverse, based on the sequence id."""
+        return tf.cond(
+            self.hash_in_range(2, 0, 1), lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
 
-  def hash_in_range(self, buckets, base, limit):
-    """Return true if the hashing key falls in the range [base, limit)."""
-    hash_bucket = tf.string_to_hash_bucket_fast(self.scene_id, buckets)
-    return tf.logical_and(
-        tf.greater_equal(hash_bucket, base), tf.less(hash_bucket, limit))
+    def hash_in_range(self, buckets, base, limit):
+        """Return true if the hashing key falls in the range [base, limit)."""
+        hash_bucket = tf.string_to_hash_bucket_fast(self.scene_id, buckets)
+        return tf.logical_and(
+            tf.greater_equal(hash_bucket, base), tf.less(hash_bucket, limit))
 
 
 class ViewSequence(
@@ -97,32 +103,32 @@ class ViewSequence(
         'scene_id', 'sequence_id', 'timestamp', 'rgb', 'pano', 'depth',
         'normal', 'pose', 'intrinsics', 'resolution'
     ])):
-  """A class for handling a sequence of views."""
+    """A class for handling a sequence of views."""
 
-  def subsequence(self, stride):
-    return ViewSequence(
-        self.scene_id, self.sequence_id,
-        tf.strided_slice(
-            self.timestamp, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(self.rgb, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(self.pano, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(self.depth, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(self.normal, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(self.pose, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(
-            self.intrinsics, [0], [self.length()], strides=[stride]),
-        tf.strided_slice(
-            self.resolution, [0], [self.length()], strides=[stride]))
+    def subsequence(self, stride):
+        return ViewSequence(
+            self.scene_id, self.sequence_id,
+            tf.strided_slice(
+                self.timestamp, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(self.rgb, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(self.pano, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(self.depth, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(self.normal, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(self.pose, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(
+                self.intrinsics, [0], [self.length()], strides=[stride]),
+            tf.strided_slice(
+                self.resolution, [0], [self.length()], strides=[stride]))
 
-  def random_subsequence(self, min_stride, max_stride):
-    random_stride = tf.random_uniform([],
-                                      minval=min_stride,
-                                      maxval=max_stride,
-                                      dtype=tf.int32)
-    return self.subsequence(random_stride)
+    def random_subsequence(self, min_stride, max_stride):
+        random_stride = tf.random_uniform([],
+                                          minval=min_stride,
+                                          maxval=max_stride,
+                                          dtype=tf.int32)
+        return self.subsequence(random_stride)
 
-  def generate_trips(self, min_gap=1, max_gap=5):
-    """Generate a tf Dataset of training triplets with an offset between three frames.
+    def generate_trips(self, min_gap=1, max_gap=5):
+        """Generate a tf Dataset of training triplets with an offset between three frames.
 
     Args:
       min_gap: (int) the minimum offset between two frames of a sampled triplet.
@@ -133,583 +139,709 @@ class ViewSequence(
       triplets from the input sequence separated by the given offset.
     """
 
-    def mapper(timestamp_trips, rgb_trips, pano_trips, depth_trips,
-               normal_trips, pose_trips):
-      """A function mapping a data tuple to ViewTrip."""
-      return ViewTrip(self.scene_id, self.sequence_id, timestamp_trips,
-                      rgb_trips, pano_trips, depth_trips, normal_trips,
-                      tf.zeros([1]), pose_trips, self.intrinsics[0],
-                      self.resolution[0])
+        def mapper(timestamp_trips, rgb_trips, pano_trips, depth_trips,
+                   normal_trips, pose_trips):
+            """A function mapping a data tuple to ViewTrip."""
+            return ViewTrip(self.scene_id, self.sequence_id, timestamp_trips,
+                            rgb_trips, pano_trips, depth_trips, normal_trips,
+                            tf.zeros([1]), pose_trips, self.intrinsics[0],
+                            self.resolution[0])
 
-    with tf.control_dependencies(
-        [tf.Assert(tf.less(max_gap, self.length()),
-                   [max_gap, self.length()])]):
-      timestamp_trips = []
-      rgb_trips = []
-      pano_trips = []
-      depth_trips = []
-      normal_trips = []
-      pose_trips = []
-      # generate triplets with an offset that ranges
-      # from 'min_gap' to 'max_gap'.
-      for stride in range(min_gap, max_gap + 1):
-        inds = tf.range(stride, self.length() - stride)
-        inds_jitter = tf.random.uniform(
-            minval=-40,
-            maxval=40,
-            shape=[self.length() - 2 * stride],
-            dtype=tf.int32)
-        rand_inds = tf.minimum(
-            tf.maximum(inds + inds_jitter, 0),
-            self.length() - 1)
-        timestamp = tf.stack([
-            self.timestamp[:-2 * stride], self.timestamp[2 * stride:],
-            self.timestamp[stride:-stride],
-            tf.gather(self.timestamp, rand_inds)
-        ],
-                             axis=1)
-        rgb = tf.stack([
-            self.rgb[:-2 * stride], self.rgb[2 * stride:],
-            self.rgb[stride:-stride],
-            tf.gather(self.rgb, rand_inds)
-        ],
-                       axis=1)
-        pano = tf.stack([
-            self.pano[:-2 * stride], self.pano[2 * stride:],
-            self.pano[stride:-stride],
-            tf.gather(self.pano, rand_inds)
-        ],
-                        axis=1)
-        depth = tf.stack([
-            self.depth[:-2 * stride], self.depth[2 * stride:],
-            self.depth[stride:-stride],
-            tf.gather(self.depth, rand_inds)
-        ],
-                         axis=1)
-        normal = tf.stack([
-            self.normal[:-2 * stride], self.normal[2 * stride:],
-            self.normal[stride:-stride],
-            tf.gather(self.normal, rand_inds)
-        ],
-                          axis=1)
-        pose = tf.stack([
-            self.pose[:-2 * stride], self.pose[2 * stride:],
-            self.pose[stride:-stride],
-            tf.gather(self.pose, rand_inds)
-        ],
-                        axis=1)
-        timestamp_trips.append(timestamp)
-        rgb_trips.append(rgb)
-        pano_trips.append(pano)
-        depth_trips.append(depth)
-        normal_trips.append(normal)
-        pose_trips.append(pose)
+        with tf.control_dependencies(
+                [tf.Assert(tf.less(max_gap, self.length()),
+                           [max_gap, self.length()])]):
+            timestamp_trips = []
+            rgb_trips = []
+            pano_trips = []
+            depth_trips = []
+            normal_trips = []
+            pose_trips = []
+            # generate triplets with an offset that ranges
+            # from 'min_gap' to 'max_gap'.
+            for stride in range(min_gap, max_gap + 1):
+                inds = tf.range(stride, self.length() - stride)
+                inds_jitter = tf.random.uniform(
+                    minval=-40,
+                    maxval=40,
+                    shape=[self.length() - 2 * stride],
+                    dtype=tf.int32)
+                rand_inds = tf.minimum(
+                    tf.maximum(inds + inds_jitter, 0),
+                    self.length() - 1)
+                timestamp = tf.stack([
+                    self.timestamp[:-2 * stride], self.timestamp[2 * stride:],
+                    self.timestamp[stride:-stride],
+                    tf.gather(self.timestamp, rand_inds)
+                ],
+                    axis=1)
+                rgb = tf.stack([
+                    self.rgb[:-2 * stride], self.rgb[2 * stride:],
+                    self.rgb[stride:-stride],
+                    tf.gather(self.rgb, rand_inds)
+                ],
+                    axis=1)
+                pano = tf.stack([
+                    self.pano[:-2 * stride], self.pano[2 * stride:],
+                    self.pano[stride:-stride],
+                    tf.gather(self.pano, rand_inds)
+                ],
+                    axis=1)
+                depth = tf.stack([
+                    self.depth[:-2 * stride], self.depth[2 * stride:],
+                    self.depth[stride:-stride],
+                    tf.gather(self.depth, rand_inds)
+                ],
+                    axis=1)
+                normal = tf.stack([
+                    self.normal[:-2 * stride], self.normal[2 * stride:],
+                    self.normal[stride:-stride],
+                    tf.gather(self.normal, rand_inds)
+                ],
+                    axis=1)
+                pose = tf.stack([
+                    self.pose[:-2 * stride], self.pose[2 * stride:],
+                    self.pose[stride:-stride],
+                    tf.gather(self.pose, rand_inds)
+                ],
+                    axis=1)
+                timestamp_trips.append(timestamp)
+                rgb_trips.append(rgb)
+                pano_trips.append(pano)
+                depth_trips.append(depth)
+                normal_trips.append(normal)
+                pose_trips.append(pose)
 
-      timestamp_trips = tf.concat(timestamp_trips, 0)
-      rgb_trips = tf.concat(rgb_trips, 0)
-      pano_trips = tf.concat(pano_trips, 0)
-      depth_trips = tf.concat(depth_trips, 0)
-      normal_trips = tf.concat(normal_trips, 0)
-      pose_trips = tf.concat(pose_trips, 0)
-      dataset = tf.data.Dataset.from_tensor_slices(
-          (timestamp_trips, rgb_trips, pano_trips, depth_trips, normal_trips,
-           pose_trips))
-      return dataset.map(mapper)
+            timestamp_trips = tf.concat(timestamp_trips, 0)
+            rgb_trips = tf.concat(rgb_trips, 0)
+            pano_trips = tf.concat(pano_trips, 0)
+            depth_trips = tf.concat(depth_trips, 0)
+            normal_trips = tf.concat(normal_trips, 0)
+            pose_trips = tf.concat(pose_trips, 0)
+            dataset = tf.data.Dataset.from_tensor_slices(
+                (timestamp_trips, rgb_trips, pano_trips, depth_trips, normal_trips,
+                 pose_trips))
+            return dataset.map(mapper)
 
-  def length(self):
-    """Returns the length of the sequence."""
-    return tf.shape(self.timestamp)[0]
+    def length(self):
+        """Returns the length of the sequence."""
+        return tf.shape(self.timestamp)[0]
 
-  def reverse(self):
-    """Returns the reverse of the sequence."""
-    return ViewSequence(self.scene_id, self.sequence_id,
-                        tf.reverse(self.timestamp, [0]),
-                        tf.reverse(self.rgb, [0]), tf.reverse(self.pano, [0]),
-                        tf.reverse(self.depth,
-                                   [0]), tf.reverse(self.normal, [0]),
-                        tf.reverse(self.pose, [0]),
-                        tf.reverse(self.intrinsics, [0]),
-                        tf.reverse(self.resolution, [0]))
+    def reverse(self):
+        """Returns the reverse of the sequence."""
+        return ViewSequence(self.scene_id, self.sequence_id,
+                            tf.reverse(self.timestamp, [0]),
+                            tf.reverse(self.rgb, [0]), tf.reverse(self.pano, [0]),
+                            tf.reverse(self.depth,
+                                       [0]), tf.reverse(self.normal, [0]),
+                            tf.reverse(self.pose, [0]),
+                            tf.reverse(self.intrinsics, [0]),
+                            tf.reverse(self.resolution, [0]))
 
-  def random_reverse(self):
-    """Returns either the sequence or its reverse, with equal probability."""
-    uniform_random = tf.random_uniform([], 0, 1.0)
-    condition = tf.less(uniform_random, 0.5)
-    return tf.cond(condition, lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
+    def random_reverse(self):
+        """Returns either the sequence or its reverse, with equal probability."""
+        uniform_random = tf.random_uniform([], 0, 1.0)
+        condition = tf.less(uniform_random, 0.5)
+        return tf.cond(condition, lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
 
-  def deterministic_reverse(self):
-    """Returns either the sequence or its reverse, based on the sequence id."""
-    return tf.cond(
-        self.hash_in_range(2, 0, 1), lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
+    def deterministic_reverse(self):
+        """Returns either the sequence or its reverse, based on the sequence id."""
+        return tf.cond(
+            self.hash_in_range(2, 0, 1), lambda: self, lambda: self.reverse())  # pylint: disable=unnecessary-lambda
 
-  def hash_in_range(self, buckets, base, limit):
-    """Return true if the hashing key falls in the range [base, limit)."""
-    hash_bucket = tf.string_to_hash_bucket_fast(self.scene_id, buckets)
-    return tf.logical_and(
-        tf.greater_equal(hash_bucket, base), tf.less(hash_bucket, limit))
+    def hash_in_range(self, buckets, base, limit):
+        """Return true if the hashing key falls in the range [base, limit)."""
+        hash_bucket = tf.string_to_hash_bucket_fast(self.scene_id, buckets)
+        return tf.logical_and(
+            tf.greater_equal(hash_bucket, base), tf.less(hash_bucket, limit))
 
 
 def check_cam_coherence(path):
-  """Check the coherence of a camera path."""
-  cam_gt = path + 'cam0_gt.visim'
-  cam_render = path + 'cam0.render'
-  lines = tf.string_split([tf.read_file(cam_render)], '\n').values
-  lines = lines[3:]
-  lines = tf.strided_slice(lines, [0], [lines.shape_as_list()[0]], [2])
-  fields = tf.reshape(tf.string_split(lines, ' ').values, [-1, 10])
-  timestamp_from_render, numbers = tf.split(fields, [1, 9], -1)
-  numbers = tf.strings.to_number(numbers)
-  eye, lookat, up = tf.split(numbers, [3, 3, 3], -1)
-  up_vector = tf.nn.l2_normalize(up - eye)
-  lookat_vector = tf.nn.l2_normalize(lookat - eye)
-  rotation_from_lookat = lookat_matrix(up_vector, lookat_vector)
+    """Check the coherence of a camera path."""
+    cam_gt = path + 'cam0_gt.visim'
+    cam_render = path + 'cam0.render'
+    lines = tf.string_split([tf.read_file(cam_render)], '\n').values
+    lines = lines[3:]
+    lines = tf.strided_slice(lines, [0], [lines.shape_as_list()[0]], [2])
+    fields = tf.reshape(tf.string_split(lines, ' ').values, [-1, 10])
+    timestamp_from_render, numbers = tf.split(fields, [1, 9], -1)
+    numbers = tf.strings.to_number(numbers)
+    eye, lookat, up = tf.split(numbers, [3, 3, 3], -1)
+    up_vector = tf.nn.l2_normalize(up - eye)
+    lookat_vector = tf.nn.l2_normalize(lookat - eye)
+    rotation_from_lookat = lookat_matrix(up_vector, lookat_vector)
 
-  lines = tf.string_split([tf.read_file(cam_gt)], '\n').values
-  lines = lines[1:]
-  fields = tf.reshape(tf.string_split(lines, ',').values, [-1, 8])
-  timestamp_from_gt, numbers = tf.split(fields, [1, 7], -1)
-  numbers = tf.strings.to_number(numbers)
-  position, quaternion = tf.split(numbers, [3, 4], -1)
-  rotation_from_quaternion = from_quaternion(quaternion)
+    lines = tf.string_split([tf.read_file(cam_gt)], '\n').values
+    lines = lines[1:]
+    fields = tf.reshape(tf.string_split(lines, ',').values, [-1, 8])
+    timestamp_from_gt, numbers = tf.split(fields, [1, 7], -1)
+    numbers = tf.strings.to_number(numbers)
+    position, quaternion = tf.split(numbers, [3, 4], -1)
+    rotation_from_quaternion = from_quaternion(quaternion)
 
-  assert tf.reduce_all(tf.equal(timestamp_from_render, timestamp_from_gt))
-  assert tf.reduce_all(tf.equal(eye, position))
-  so3_diff = (tf.trace(
-      tf.matmul(
-          rotation_from_lookat, rotation_from_quaternion, transpose_a=True)) -
-              1) / 2
-  tf.assert_near(so3_diff, tf.ones_like(so3_diff))
+    assert tf.reduce_all(tf.equal(timestamp_from_render, timestamp_from_gt))
+    assert tf.reduce_all(tf.equal(eye, position))
+    so3_diff = (tf.trace(
+        tf.matmul(
+            rotation_from_lookat, rotation_from_quaternion, transpose_a=True)) -
+                1) / 2
+    tf.assert_near(so3_diff, tf.ones_like(so3_diff))
 
 
 def lookat_matrix(up, lookat_direction):
-  """Construct a matrix that "looks at" a direction."""
-  # lookat_direction [Batch, 3]
-  # return [Batch, 3, 3] colomn major cam2world lookat matrix.
-  # z is the forward direction. x is the right vector. y is the up vector.
-  # Stack x, y, z vectors by colomn to get the lookat matrix.
-  # [[x.x y.x z.x]
-  #  [x.y y.y z.y]
-  #  [x.z y.z z.z]]
-  z = tf.linalg.l2_normalize(-lookat_direction, axis=-1)
-  x = tf.linalg.l2_normalize(tf.cross(up, z), axis=-1)
-  y = tf.cross(z, x)
-  lookat = tf.stack([x, y, z], axis=-1)
-  return lookat
+    """Construct a matrix that "looks at" a direction."""
+    # lookat_direction [Batch, 3]
+    # return [Batch, 3, 3] colomn major cam2world lookat matrix.
+    # z is the forward direction. x is the right vector. y is the up vector.
+    # Stack x, y, z vectors by colomn to get the lookat matrix.
+    # [[x.x y.x z.x]
+    #  [x.y y.y z.y]
+    #  [x.z y.z z.z]]
+    z = tf.linalg.l2_normalize(-lookat_direction, axis=-1)
+    x = tf.linalg.l2_normalize(tf.cross(up, z), axis=-1)
+    y = tf.cross(z, x)
+    lookat = tf.stack([x, y, z], axis=-1)
+    return lookat
 
 
 def load_sequence(sequence_dir, data_dir, parallelism=10, gt_dir=None):
-  """Load a sequence."""
-  n_timestamp = 1000
-  v = tf.string_split([sequence_dir], '/').values
-  scene_id, sequence_id = v[-2], v[-1]
-  if gt_dir:
-    camera_dir = gt_dir + scene_id + '/'
-  else:
-    camera_dir = data_dir + 'GroundTruth_HD1-HD6/' + scene_id + '/'
-  print(camera_dir)
-  trajectory_name = 'velocity_angular' + tf.strings.substr(v[-1], -4, -4) + '/'
-  camera_dir = camera_dir + trajectory_name
-  camera_timestamp_path = camera_dir + 'cam0.timestamp'
-  timestamp, img_name = read_timestamp(camera_timestamp_path)
+    """Load a sequence."""
+    n_timestamp = 1000
+    v = tf.string_split([sequence_dir], '/').values
+    scene_id, sequence_id = v[-2], v[-1]
+    if gt_dir:
+        camera_dir = gt_dir + scene_id + '/'
+    else:
+        camera_dir = data_dir + 'GroundTruth_HD1-HD6/' + scene_id + '/'
+    print(camera_dir)
+    trajectory_name = 'velocity_angular' + tf.strings.substr(v[-1], -4, -4) + '/'
+    camera_dir = camera_dir + trajectory_name
+    camera_timestamp_path = camera_dir + 'cam0.timestamp'
+    timestamp, img_name = read_timestamp(camera_timestamp_path)
 
-  print(sequence_dir)
-  rgb_paths = sequence_dir + '/cam0/data/' + img_name
-  pano_paths = sequence_dir + '/cam0_pano/data/' + img_name
-  depth_paths = sequence_dir + '/depth0/data/' + img_name
-  normal_paths = sequence_dir + '/normal0/data/' + img_name
+    print(sequence_dir)
+    rgb_paths = sequence_dir + '/cam0/data/' + img_name
+    pano_paths = sequence_dir + '/cam0_pano/data/' + img_name
+    depth_paths = sequence_dir + '/depth0/data/' + img_name
+    normal_paths = sequence_dir + '/normal0/data/' + img_name
 
-  camera_parameters_path = camera_dir + 'cam0.ccam'
-  pose_matrix, intrinsic_matrix, resolution = read_camera_parameters(
-      camera_parameters_path, n_timestamp, parallel_camera_process=parallelism)
-  return ViewSequence(scene_id, sequence_id, timestamp, rgb_paths, pano_paths,
-                      depth_paths, normal_paths, pose_matrix, intrinsic_matrix,
-                      resolution)
+    camera_parameters_path = camera_dir + 'cam0.ccam'
+    pose_matrix, intrinsic_matrix, resolution = read_camera_parameters(
+        camera_parameters_path, n_timestamp, parallel_camera_process=parallelism)
+    return ViewSequence(scene_id, sequence_id, timestamp, rgb_paths, pano_paths,
+                        depth_paths, normal_paths, pose_matrix, intrinsic_matrix,
+                        resolution)
 
 
 def read_timestamp(path):
-  """Read a path's timestamp."""
-  # parse the lines
-  lines = tf.string_split([tf.read_file(path)], '\n').values
-  # ignore the header
-  lines = lines[1:]
-  # parse the columns
-  fields = tf.reshape(tf.string_split(lines, ',').values, [-1, 2])
-  timestamp, img_name = tf.split(fields, [1, 1], -1)
-  timestamp = tf.squeeze(timestamp, -1)
-  img_name = tf.squeeze(img_name, -1)
-  return timestamp, img_name
+    """Read a path's timestamp."""
+    # parse the lines
+    lines = tf.string_split([tf.read_file(path)], '\n').values
+    # ignore the header
+    lines = lines[1:]
+    # parse the columns
+    fields = tf.reshape(tf.string_split(lines, ',').values, [-1, 2])
+    timestamp, img_name = tf.split(fields, [1, 1], -1)
+    timestamp = tf.squeeze(timestamp, -1)
+    img_name = tf.squeeze(img_name, -1)
+    return timestamp, img_name
 
 
 def read_camera_parameters(path, n_timestamp, parallel_camera_process=10):
-  """Read a camera's parameters."""
-  # parse the lines
-  lines = tf.string_split([tf.read_file(path)], '\n').values
-  # ignore the header
-  lines = lines[6:]
-  # parse the columns
-  fields = tf.reshape(tf.string_split(lines, ' ').values, [-1, 15])
-  # convert string to float32
-  fields = tf.strings.to_number(fields)
-  # <camera info: f, cx, cy, dist.coeff[0],dist.coeff[1],dist.coeff[2]>
-  # <orientation: w,x,y,z> <position: x,y,z> <image resolution: width, height>
-  camera_info, orientation, position, resolution = tf.split(
-      fields, [6, 4, 3, 2], -1)
-  camera_ds = tf.data.Dataset.from_tensor_slices(
-      (camera_info, orientation, position, resolution))
+    """Read a camera's parameters."""
+    # parse the lines
+    lines = tf.string_split([tf.read_file(path)], '\n').values
+    # ignore the header
+    lines = lines[6:]
+    # parse the columns
+    fields = tf.reshape(tf.string_split(lines, ' ').values, [-1, 15])
+    # convert string to float32
+    fields = tf.strings.to_number(fields)
+    # <camera info: f, cx, cy, dist.coeff[0],dist.coeff[1],dist.coeff[2]>
+    # <orientation: w,x,y,z> <position: x,y,z> <image resolution: width, height>
+    camera_info, orientation, position, resolution = tf.split(
+        fields, [6, 4, 3, 2], -1)
+    camera_ds = tf.data.Dataset.from_tensor_slices(
+        (camera_info, orientation, position, resolution))
 
-  def process_camera_parameters(camera_info, orientation, position, resolution):
-    # convert quaternion to 3x3 matrix
-    rotation_matrix = from_quaternion(orientation)
-    # 3x4 pose matrix [R_3x3 |t_3x1]
-    pose_matrix = tf.concat([rotation_matrix, tf.expand_dims(position, -1)], -1)
-    intrinsic_matrix = build_intrinsic_matrix(camera_info[0], camera_info[1],
-                                              camera_info[2])
-    return (pose_matrix, intrinsic_matrix, resolution)
+    def process_camera_parameters(camera_info, orientation, position, resolution):
+        # convert quaternion to 3x3 matrix
+        rotation_matrix = from_quaternion(orientation)
+        # 3x4 pose matrix [R_3x3 |t_3x1]
+        pose_matrix = tf.concat([rotation_matrix, tf.expand_dims(position, -1)], -1)
+        intrinsic_matrix = build_intrinsic_matrix(camera_info[0], camera_info[1],
+                                                  camera_info[2])
+        return (pose_matrix, intrinsic_matrix, resolution)
 
-  return dataset_to_tensors(
-      camera_ds,
-      capacity=n_timestamp,
-      map_fn=process_camera_parameters,
-      parallelism=parallel_camera_process)
+    return dataset_to_tensors(
+        camera_ds,
+        capacity=n_timestamp,
+        map_fn=process_camera_parameters,
+        parallelism=parallel_camera_process)
 
 
 def build_intrinsic_matrix(f, cx, cy):
-  # camera instrinsics [[f 0 cx]
-  #                     [0 f cy]
-  #                     [0 0  1]] (f is focal length in pixels.)
-  return tf.stack(
-      [tf.stack([f, 0., cx]),
-       tf.stack([0., f, cy]),
-       tf.constant([0., 0., 1.])])
+    # camera instrinsics [[f 0 cx]
+    #                     [0 f cy]
+    #                     [0 0  1]] (f is focal length in pixels.)
+    return tf.stack(
+        [tf.stack([f, 0., cx]),
+         tf.stack([0., f, cy]),
+         tf.constant([0., 0., 1.])])
 
 
 def load_image_data(trip):
-  """Load empty ViewTrip with images."""
+    """Load empty ViewTrip with images."""
 
-  def load_single_image(filename, shape):
-    """Load a single image given the filename."""
-    image = tf.image.decode_png(tf.read_file(filename), 3)
-    image = tf.image.convert_image_dtype(image, tf.float32)
-    image.set_shape(shape)
-    return image
+    def load_single_image(filename, shape):
+        """Load a single image given the filename."""
+        image = tf.image.decode_png(tf.read_file(filename), 3)
+        image = tf.image.convert_image_dtype(image, tf.float32)
+        image.set_shape(shape)
+        return image
 
-  def load_depth(filename, shape,intrinsics=[600,600,320,240]):
-    """Load the 16-bit png depth map in milimeters given the filename."""
-    def euclidean_ray_length_to_z_coordinate(depth_image, intrinsic):
-      center_x = intrinsic[2]
-      center_y = intrinsic[3]
+    def load_depth(filename, shape, intrinsics=[600, 600, 320, 240]):
+        """Load the 16-bit png depth map in milimeters given the filename."""
 
-      constant_x = 1 / intrinsic[0]
-      constant_y = 1 / intrinsic[1]
+        def euclidean_ray_length_to_z_coordinate(depth_image, intrinsic):
+            center_x = intrinsic[2]
+            center_y = intrinsic[3]
 
-      vs = np.array(
-          [(v - center_x) * constant_x for v in range(0, depth_image.shape[1])])
-      us = np.array(
-          [(u - center_y) * constant_y for u in range(0, depth_image.shape[0])])
+            constant_x = 1 / intrinsic[0]
+            constant_y = 1 / intrinsic[1]
 
-      return (np.sqrt(
-          np.square(depth_image / 1000.0) /
-          (1 + np.square(vs[np.newaxis, :]) + np.square(us[:, np.newaxis]))) *
-              1000.0).astype(np.uint16)
-    # TODO: map back to normal depth
-    depth = tf.image.decode_png(tf.read_file(filename), 3, tf.dtypes.uint16)
-    depth = tf.cast(depth, tf.float32) / 1000
-    depth.set_shape(shape)
-    return depth
+            vs = np.array(
+                [(v - center_x) * constant_x for v in range(0, depth_image.shape[1])])
+            us = np.array(
+                [(u - center_y) * constant_y for u in range(0, depth_image.shape[0])])
 
-  def load_surface_normal(filename, shape):
-    """Load the surface normal given the filename."""
-    normal = tf.image.decode_png(tf.read_file(filename), 3, tf.dtypes.uint16)
-    normal = 2 * tf.cast(normal, tf.float32) / (2**16 - 1) - 1
-    normal.set_shape(shape)
-    return normal
+            return (np.sqrt(
+                np.square(depth_image / 1000.0) /
+                (1 + np.square(vs[np.newaxis, :]) + np.square(us[:, np.newaxis]))) *
+                    1000.0).astype(np.uint16)
 
-  trip_length = 4  # triplet plus more distant camera for pano supervision
-  rgb = dataset_to_tensors(
-      tf.data.Dataset.from_tensor_slices(trip.rgb),
-      trip_length,
-      lambda filename: load_single_image(filename, [480, 640, 3]),
-      parallelism=4)
-  pano = dataset_to_tensors(
-      tf.data.Dataset.from_tensor_slices(trip.pano),
-      trip_length,
-      lambda filename: load_single_image(filename, [1500, 3000, 3]),
-      parallelism=4)
-  depth = dataset_to_tensors(
-      tf.data.Dataset.from_tensor_slices(trip.depth),
-      trip_length,
-      lambda filename: load_depth(filename, [480, 640, 3]),
-      parallelism=4)
-  # depth: [N, height, width, 3] all channels are identical.
-  depth = depth[:, :, :, :1]
-  normal = dataset_to_tensors(
-      tf.data.Dataset.from_tensor_slices(trip.normal),
-      trip_length,
-      lambda filename: load_surface_normal(filename, [480, 640, 3]),
-      parallelism=4)
+        # TODO: map back to normal depth
+        depth = tf.image.decode_png(tf.read_file(filename), 3, tf.dtypes.uint16)
+        depth = tf.cast(depth, tf.float32) / 1000
+        depth.set_shape(shape)
+        return depth
 
-  return ViewTrip(trip.scene_id, trip.sequence_id, trip.timestamp, rgb, pano,
-                  depth, normal, trip.mask, trip.pose, trip.intrinsics,
-                  trip.resolution)
+    def load_surface_normal(filename, shape):
+        """Load the surface normal given the filename."""
+        normal = tf.image.decode_png(tf.read_file(filename), 3, tf.dtypes.uint16)
+        normal = 2 * tf.cast(normal, tf.float32) / (2 ** 16 - 1) - 1
+        normal.set_shape(shape)
+        return normal
+
+    trip_length = 4  # triplet plus more distant camera for pano supervision
+    rgb = dataset_to_tensors(
+        tf.data.Dataset.from_tensor_slices(trip.rgb),
+        trip_length,
+        lambda filename: load_single_image(filename, [480, 640, 3]),
+        parallelism=4)
+    pano = dataset_to_tensors(
+        tf.data.Dataset.from_tensor_slices(trip.pano),
+        trip_length,
+        lambda filename: load_single_image(filename, [1500, 3000, 3]),
+        parallelism=4)
+    depth = dataset_to_tensors(
+        tf.data.Dataset.from_tensor_slices(trip.depth),
+        trip_length,
+        lambda filename: load_depth(filename, [480, 640, 3]),
+        parallelism=4)
+    # depth: [N, height, width, 3] all channels are identical.
+    depth = depth[:, :, :, :1]
+    normal = dataset_to_tensors(
+        tf.data.Dataset.from_tensor_slices(trip.normal),
+        trip_length,
+        lambda filename: load_surface_normal(filename, [480, 640, 3]),
+        parallelism=4)
+
+    return ViewTrip(trip.scene_id, trip.sequence_id, trip.timestamp, rgb, pano,
+                    depth, normal, trip.mask, trip.pose, trip.intrinsics,
+                    trip.resolution)
 
 
 def small_translation_condition(trip, translation_threshold):
-  # trip.pose: [N, 3, 4]
-  positions = trip.pose[:, :, -1]
-  t_norm = tf.norm(positions[0] - positions[1], axis=-1)
-  return tf.greater(t_norm, translation_threshold)
+    # trip.pose: [N, 3, 4]
+    positions = trip.pose[:, :, -1]
+    t_norm = tf.norm(positions[0] - positions[1], axis=-1)
+    return tf.greater(t_norm, translation_threshold)
 
 
 def too_close_condition(trip, depth_threshold=0.1):
-  depths = trip.depth[:3, :, :, 0]
-  depthmax = tf.reduce_max(depths)
-  depths = tf.where(
-      tf.equal(depths, 0.0), depthmax * tf.ones_like(depths), depths)
-  return tf.greater(tf.reduce_min(depths), depth_threshold)
+    depths = trip.depth[:3, :, :, 0]
+    depthmax = tf.reduce_max(depths)
+    depths = tf.where(
+        tf.equal(depths, 0.0), depthmax * tf.ones_like(depths), depths)
+    return tf.greater(tf.reduce_min(depths), depth_threshold)
 
 
 def pano_forwards_condition(trip):
-  """Checks if a pano is in a forward condition."""
-  ref_pose = trip.pose[1, :, :]
-  pano_pose = trip.pose[3, :, :]
-  ref_twds = -1.0 * ref_pose[:, 2]
+    """Checks if a pano is in a forward condition."""
+    ref_pose = trip.pose[1, :, :]
+    pano_pose = trip.pose[3, :, :]
+    ref_twds = -1.0 * ref_pose[:, 2]
 
-  # make sure max_depth>forward motion>median_depth
-  t_vec = pano_pose[:, 3] - ref_pose[:, 3]
-  ref_depth = trip.depth[1, :, :, 0]
-  ref_depth = tf.where(
-      tf.equal(ref_depth, 0.0),
-      tf.reduce_max(ref_depth) * tf.ones_like(ref_depth), ref_depth)
-  max_depth = tf.reduce_max(ref_depth)
-  median_depth = tf.contrib.distributions.percentile(ref_depth, 0.5)
+    # make sure max_depth>forward motion>median_depth
+    t_vec = pano_pose[:, 3] - ref_pose[:, 3]
+    ref_depth = trip.depth[1, :, :, 0]
+    ref_depth = tf.where(
+        tf.equal(ref_depth, 0.0),
+        tf.reduce_max(ref_depth) * tf.ones_like(ref_depth), ref_depth)
+    max_depth = tf.reduce_max(ref_depth)
+    median_depth = tf.contrib.distributions.percentile(ref_depth, 0.5)
 
-  min_depth_cond = tf.greater(tf.reduce_sum(ref_twds * t_vec), median_depth)
-  max_depth_cond = tf.less(tf.reduce_sum(ref_twds * t_vec), max_depth)
+    min_depth_cond = tf.greater(tf.reduce_sum(ref_twds * t_vec), median_depth)
+    max_depth_cond = tf.less(tf.reduce_sum(ref_twds * t_vec), max_depth)
 
-  return tf.logical_and(min_depth_cond, max_depth_cond)
+    return tf.logical_and(min_depth_cond, max_depth_cond)
 
 
 def dark_trip_condition(trip, threshold=0.1):
-  cond = tf.math.greater(image_brightness(trip.rgb), threshold)
-  return tf.math.reduce_all(cond)
+    cond = tf.math.greater(image_brightness(trip.rgb), threshold)
+    return tf.math.reduce_all(cond)
 
 
 def image_brightness(image):
-  r, g, b = tf.split(image, [1, 1, 1], -1)
-  brightness = tf.sqrt(0.299 * (r**2) + 0.587 * (g**2) + 0.114 * (b**2))
-  avg_brightness = tf.reduce_mean(brightness, axis=[1, 2, 3])
-  return avg_brightness
+    r, g, b = tf.split(image, [1, 1, 1], -1)
+    brightness = tf.sqrt(0.299 * (r ** 2) + 0.587 * (g ** 2) + 0.114 * (b ** 2))
+    avg_brightness = tf.reduce_mean(brightness, axis=[1, 2, 3])
+    return avg_brightness
 
 
 def filter_random_lighting(sequence_dir):
-  sequence_name = tf.string_split([sequence_dir], '/').values[-1]
-  lighting = tf.substr(sequence_name, 0, 6)
-  return tf.not_equal(lighting, 'random')
+    sequence_name = tf.string_split([sequence_dir], '/').values[-1]
+    lighting = tf.substr(sequence_name, 0, 6)
+    return tf.not_equal(lighting, 'random')
 
 
 def filter_seq_length(sequence_dir):
-  img_files = tf.data.Dataset.list_files(sequence_dir + '/cam0/data/*.png')
-  pano_files = tf.data.Dataset.list_files(sequence_dir +
-                                          '/cam0_pano/data/*.png')
-  num_imgs = tf.data.experimental.cardinality(img_files)
-  num_panos = tf.data.experimental.cardinality(pano_files)
-  return tf.logical_and(tf.equal(num_imgs, 1000), tf.equal(num_panos, 1000))
+    img_files = tf.data.Dataset.list_files(sequence_dir + '/cam0/data/*.png')
+    pano_files = tf.data.Dataset.list_files(sequence_dir +
+                                            '/cam0_pano/data/*.png')
+    num_imgs = tf.data.experimental.cardinality(img_files)
+    num_panos = tf.data.experimental.cardinality(pano_files)
+    return tf.logical_and(tf.equal(num_imgs, 1000), tf.equal(num_panos, 1000))
 
 
 def prepare_training_set(
-    dataset,
-    min_gap,
-    max_gap,
-    min_stride,
-    max_stride,
-    batch_size,
-    epochs,
-    min_overlap,  # pylint: disable=unused-argument
-    max_overlap,  # pylint: disable=unused-argument
-    translation_threshold,
-    luminence_threshold,
-    depth_threshold,
-    parallel_image_reads,
-    prefetch_buffer,
-    filter_envmap=True):
-  """Prepare the training set."""
-  dataset = dataset.map(
-      lambda sequence: sequence.random_subsequence(min_stride, max_stride))
-  dataset = dataset.flat_map(
-      lambda sequence: sequence.generate_trips(min_gap, max_gap))
-  dataset = dataset.shuffle(1000000).repeat(epochs)
-  # filter small translations
-  dataset = dataset.filter(
-      lambda trip: small_translation_condition(trip, translation_threshold))
-  # load images
-  dataset = dataset.map(load_image_data, parallel_image_reads).apply(
-      tf.data.experimental.ignore_errors())
-  # filter dark pairs
-  dataset = dataset.filter(
-      lambda trip: dark_trip_condition(trip, luminence_threshold))
-  # filter out target panos that move backwards instead of forwards
-  if filter_envmap:
-    dataset = dataset.filter(pano_forwards_condition)
-  # filter out examples that are too close to scene
-  dataset = dataset.filter(
-      lambda trip: too_close_condition(trip, depth_threshold))
-  dataset = dataset.batch(
-      batch_size, drop_remainder=True).prefetch(prefetch_buffer)
-  return dataset
+        dataset,
+        min_gap,
+        max_gap,
+        min_stride,
+        max_stride,
+        batch_size,
+        epochs,
+        min_overlap,  # pylint: disable=unused-argument
+        max_overlap,  # pylint: disable=unused-argument
+        translation_threshold,
+        luminence_threshold,
+        depth_threshold,
+        parallel_image_reads,
+        prefetch_buffer,
+        filter_envmap=True):
+    """Prepare the training set."""
+    dataset = dataset.map(
+        lambda sequence: sequence.random_subsequence(min_stride, max_stride))
+    dataset = dataset.flat_map(
+        lambda sequence: sequence.generate_trips(min_gap, max_gap))
+    dataset = dataset.shuffle(1000000).repeat(epochs)
+    # filter small translations
+    dataset = dataset.filter(
+        lambda trip: small_translation_condition(trip, translation_threshold))
+    # load images
+    dataset = dataset.map(load_image_data, parallel_image_reads).apply(
+        tf.data.experimental.ignore_errors())
+    # filter dark pairs
+    dataset = dataset.filter(
+        lambda trip: dark_trip_condition(trip, luminence_threshold))
+    # filter out target panos that move backwards instead of forwards
+    if filter_envmap:
+        dataset = dataset.filter(pano_forwards_condition)
+    # filter out examples that are too close to scene
+    dataset = dataset.filter(
+        lambda trip: too_close_condition(trip, depth_threshold))
+    dataset = dataset.batch(
+        batch_size, drop_remainder=True).prefetch(prefetch_buffer)
+    return dataset
 
 
 def prepare_eval_set(
-    dataset,
-    min_gap,
-    max_gap,
-    min_stride,
-    max_stride,
-    batch_size,
-    min_overlap,  # pylint: disable=unused-argument
-    max_overlap,  # pylint: disable=unused-argument
-    translation_threshold,
-    luminence_threshold,
-    depth_threshold,
-    parallel_image_reads,
-    prefetch_buffer):
-  """Prepare the eval set."""
+        dataset,
+        min_gap,
+        max_gap,
+        min_stride,
+        max_stride,
+        batch_size,
+        min_overlap,  # pylint: disable=unused-argument
+        max_overlap,  # pylint: disable=unused-argument
+        translation_threshold,
+        luminence_threshold,
+        depth_threshold,
+        parallel_image_reads,
+        prefetch_buffer):
+    """Prepare the eval set."""
 
-  stride = (min_stride + max_stride) // 2
-  dataset = dataset.map(lambda sequence: sequence.subsequence(stride))
-  dataset = dataset.flat_map(
-      lambda sequence: sequence.generate_trips(min_gap, max_gap))
-  # filter small translations
-  dataset = dataset.filter(
-      lambda trip: small_translation_condition(trip, translation_threshold))
-  # load images
-  dataset = dataset.map(load_image_data, parallel_image_reads).apply(
-      tf.data.experimental.ignore_errors())
-  # filter dark trips
-  dataset = dataset.filter(
-      lambda trip: dark_trip_condition(trip, luminence_threshold))
-  # filter target panos that move backwards instead of forwards
-  dataset = dataset.filter(pano_forwards_condition)
-  # filter out examples that are too close to scene
-  dataset = dataset.filter(
-      lambda trip: too_close_condition(trip, depth_threshold))
+    stride = (min_stride + max_stride) // 2
+    dataset = dataset.map(lambda sequence: sequence.subsequence(stride))
+    dataset = dataset.flat_map(
+        lambda sequence: sequence.generate_trips(min_gap, max_gap))
+    # filter small translations
+    dataset = dataset.filter(
+        lambda trip: small_translation_condition(trip, translation_threshold))
+    # load images
+    dataset = dataset.map(load_image_data, parallel_image_reads).apply(
+        tf.data.experimental.ignore_errors())
+    # filter dark trips
+    dataset = dataset.filter(
+        lambda trip: dark_trip_condition(trip, luminence_threshold))
+    # filter target panos that move backwards instead of forwards
+    dataset = dataset.filter(pano_forwards_condition)
+    # filter out examples that are too close to scene
+    dataset = dataset.filter(
+        lambda trip: too_close_condition(trip, depth_threshold))
 
-  dataset = dataset.batch(
-      batch_size, drop_remainder=True).prefetch(prefetch_buffer)
-  return dataset
+    dataset = dataset.batch(
+        batch_size, drop_remainder=True).prefetch(prefetch_buffer)
+    return dataset
 
 
 def world_to_camera_projection(p_world, intrinsics, world_to_camera):
-  """Project world coordinates to camera coordinates."""
-  shape = p_world.shape.as_list()
-  height, width = shape[0], shape[1]
-  p_world_homogeneous = tf.concat([p_world, tf.ones([height, width, 1])], -1)
-  intrinsics = tf.tile(intrinsics[tf.newaxis, tf.newaxis, :],
-                       [height, width, 1, 1])
-  world_to_camera = tf.tile(world_to_camera[tf.newaxis, tf.newaxis, :],
-                            [height, width, 1, 1])
-  p_camera = tf.squeeze(
-      tf.matmul(world_to_camera, tf.expand_dims(p_world_homogeneous, -1)), -1)
-  p_camera_z = p_camera * tf.constant([1., 1., -1.], shape=[1, 1, 3])
-  p_image = tf.squeeze(
-      tf.matmul(intrinsics, tf.expand_dims(p_camera_z, -1)), -1)
-  return p_image[:, :, :2] / (p_image[:, :, -1:] + 1e-8), p_image[:, :, -1]
+    """Project world coordinates to camera coordinates."""
+    shape = p_world.shape.as_list()
+    height, width = shape[0], shape[1]
+    p_world_homogeneous = tf.concat([p_world, tf.ones([height, width, 1])], -1)
+    intrinsics = tf.tile(intrinsics[tf.newaxis, tf.newaxis, :],
+                         [height, width, 1, 1])
+    world_to_camera = tf.tile(world_to_camera[tf.newaxis, tf.newaxis, :],
+                              [height, width, 1, 1])
+    p_camera = tf.squeeze(
+        tf.matmul(world_to_camera, tf.expand_dims(p_world_homogeneous, -1)), -1)
+    p_camera_z = p_camera * tf.constant([1., 1., -1.], shape=[1, 1, 3])
+    p_image = tf.squeeze(
+        tf.matmul(intrinsics, tf.expand_dims(p_camera_z, -1)), -1)
+    return p_image[:, :, :2] / (p_image[:, :, -1:] + 1e-8), p_image[:, :, -1]
 
 
 def camera_to_world_projection(depth, intrinsics, camera_to_world):
-  """Project camera coordinates to world coordinates."""
-  # p_pixel: batch, w, h, 3 principal_point, fov 2-d list
-  # r: batch, 3, 3 camera to world rotation
-  # t: batch, 3 camera to world translation, depth: batch, w, h, 1
-  shape = depth.shape.as_list()
-  height, width = shape[0], shape[1]
-  xx, yy = tf.meshgrid(
-      tf.lin_space(0., width - 1., width), tf.lin_space(0., height - 1.,
-                                                        height))
-  p_pixel = tf.stack([xx, yy], axis=-1)
-  p_pixel_homogeneous = tf.concat([p_pixel, tf.ones([height, width, 1])], -1)
+    """Project camera coordinates to world coordinates."""
+    # p_pixel: batch, w, h, 3 principal_point, fov 2-d list
+    # r: batch, 3, 3 camera to world rotation
+    # t: batch, 3 camera to world translation, depth: batch, w, h, 1
+    shape = depth.shape.as_list()
+    height, width = shape[0], shape[1]
+    xx, yy = tf.meshgrid(
+        tf.lin_space(0., width - 1., width), tf.lin_space(0., height - 1.,
+                                                          height))
+    p_pixel = tf.stack([xx, yy], axis=-1)
+    p_pixel_homogeneous = tf.concat([p_pixel, tf.ones([height, width, 1])], -1)
 
-  camera_to_world = tf.tile(camera_to_world[tf.newaxis, tf.newaxis, :],
-                            [height, width, 1, 1])
-  intrinsics = tf.tile(intrinsics[tf.newaxis, tf.newaxis, :],
-                       [height, width, 1, 1])
-  # Convert pixels coordinates (u, v, 1) to camera coordinates (x_c, y_c, f)
-  # on the image plane.
-  p_image = tf.squeeze(
-      tf.matmul(
-          tf.matrix_inverse(intrinsics), tf.expand_dims(p_pixel_homogeneous,
-                                                        -1)), -1)
+    camera_to_world = tf.tile(camera_to_world[tf.newaxis, tf.newaxis, :],
+                              [height, width, 1, 1])
+    intrinsics = tf.tile(intrinsics[tf.newaxis, tf.newaxis, :],
+                         [height, width, 1, 1])
+    # Convert pixels coordinates (u, v, 1) to camera coordinates (x_c, y_c, f)
+    # on the image plane.
+    p_image = tf.squeeze(
+        tf.matmul(
+            tf.matrix_inverse(intrinsics), tf.expand_dims(p_pixel_homogeneous,
+                                                          -1)), -1)
 
-  lookat_axis = tf.tile(
-      tf.constant([0., 0., 1.], shape=[1, 1, 3]), [height, width, 1])
-  z = depth * tf.reduce_sum(
-      tf.math.l2_normalize(p_image, axis=-1) * lookat_axis,
-      axis=-1,
-      keepdims=True)
-  p_camera = z * p_image
-  # convert from OpenCV convention to OpenGL
-  p_camera = p_camera * tf.constant([1., 1., -1.], shape=[1, 1, 3])
-  p_camera_homogeneous = tf.concat(
-      [p_camera, tf.ones(shape=[height, width, 1])], -1)
-  # Convert camera coordinates to world coordinates.
-  p_world = tf.squeeze(
-      tf.matmul(camera_to_world, tf.expand_dims(p_camera_homogeneous, -1)), -1)
-  return p_world
+    lookat_axis = tf.tile(
+        tf.constant([0., 0., 1.], shape=[1, 1, 3]), [height, width, 1])
+    z = depth * tf.reduce_sum(
+        tf.math.l2_normalize(p_image, axis=-1) * lookat_axis,
+        axis=-1,
+        keepdims=True)
+    p_camera = z * p_image
+    # convert from OpenCV convention to OpenGL
+    p_camera = p_camera * tf.constant([1., 1., -1.], shape=[1, 1, 3])
+    p_camera_homogeneous = tf.concat(
+        [p_camera, tf.ones(shape=[height, width, 1])], -1)
+    # Convert camera coordinates to world coordinates.
+    p_world = tf.squeeze(
+        tf.matmul(camera_to_world, tf.expand_dims(p_camera_homogeneous, -1)), -1)
+    return p_world
 
 
 def image_overlap(depth1, pose1_c2w, depth2, pose2_c2w, intrinsics):
-  """Determines the overlap of two images."""
+    """Determines the overlap of two images."""
 
-  pose1_w2c = tf.matrix_inverse(
-      tf.concat([pose1_c2w, tf.constant([[0., 0., 0., 1.]])], 0))[:3]
-  pose2_w2c = tf.matrix_inverse(
-      tf.concat([pose2_c2w, tf.constant([[0., 0., 0., 1.]])], 0))[:3]
+    pose1_w2c = tf.matrix_inverse(
+        tf.concat([pose1_c2w, tf.constant([[0., 0., 0., 1.]])], 0))[:3]
+    pose2_w2c = tf.matrix_inverse(
+        tf.concat([pose2_c2w, tf.constant([[0., 0., 0., 1.]])], 0))[:3]
 
-  p_world1 = camera_to_world_projection(depth1, intrinsics, pose1_c2w)
-  p_image1_in_2, z1_c2 = world_to_camera_projection(p_world1, intrinsics,
-                                                    pose2_w2c)
+    p_world1 = camera_to_world_projection(depth1, intrinsics, pose1_c2w)
+    p_image1_in_2, z1_c2 = world_to_camera_projection(p_world1, intrinsics,
+                                                      pose2_w2c)
 
-  p_world2 = camera_to_world_projection(depth2, intrinsics, pose2_c2w)
-  p_image2_in_1, z2_c1 = world_to_camera_projection(p_world2, intrinsics,
-                                                    pose1_w2c)
+    p_world2 = camera_to_world_projection(depth2, intrinsics, pose2_c2w)
+    p_image2_in_1, z2_c1 = world_to_camera_projection(p_world2, intrinsics,
+                                                      pose1_w2c)
 
-  shape = depth1.shape.as_list()
-  height, width = shape[0], shape[1]
-  height = tf.cast(height, tf.float32)
-  width = tf.cast(width, tf.float32)
-  mask_h2_in_1 = tf.logical_and(
-      tf.less_equal(p_image2_in_1[:, :, 1], height),
-      tf.greater_equal(p_image2_in_1[:, :, 1], 0.))
-  mask_w2_in_1 = tf.logical_and(
-      tf.less_equal(p_image2_in_1[:, :, 0], width),
-      tf.greater_equal(p_image2_in_1[:, :, 0], 0.))
-  mask2_in_1 = tf.logical_and(
-      tf.logical_and(mask_h2_in_1, mask_w2_in_1), z2_c1 > 0)
+    shape = depth1.shape.as_list()
+    height, width = shape[0], shape[1]
+    height = tf.cast(height, tf.float32)
+    width = tf.cast(width, tf.float32)
+    mask_h2_in_1 = tf.logical_and(
+        tf.less_equal(p_image2_in_1[:, :, 1], height),
+        tf.greater_equal(p_image2_in_1[:, :, 1], 0.))
+    mask_w2_in_1 = tf.logical_and(
+        tf.less_equal(p_image2_in_1[:, :, 0], width),
+        tf.greater_equal(p_image2_in_1[:, :, 0], 0.))
+    mask2_in_1 = tf.logical_and(
+        tf.logical_and(mask_h2_in_1, mask_w2_in_1), z2_c1 > 0)
 
-  mask_h1_in_2 = tf.logical_and(
-      tf.less_equal(p_image1_in_2[:, :, 1], height),
-      tf.greater_equal(p_image1_in_2[:, :, 1], 0.))
-  mask_w1_in_2 = tf.logical_and(
-      tf.less_equal(p_image1_in_2[:, :, 0], width),
-      tf.greater_equal(p_image1_in_2[:, :, 0], 0.))
-  mask1_in_2 = tf.logical_and(
-      tf.logical_and(mask_h1_in_2, mask_w1_in_2), z1_c2 > 0)
+    mask_h1_in_2 = tf.logical_and(
+        tf.less_equal(p_image1_in_2[:, :, 1], height),
+        tf.greater_equal(p_image1_in_2[:, :, 1], 0.))
+    mask_w1_in_2 = tf.logical_and(
+        tf.less_equal(p_image1_in_2[:, :, 0], width),
+        tf.greater_equal(p_image1_in_2[:, :, 0], 0.))
+    mask1_in_2 = tf.logical_and(
+        tf.logical_and(mask_h1_in_2, mask_w1_in_2), z1_c2 > 0)
 
-  return mask1_in_2, mask2_in_1
+    return mask1_in_2, mask2_in_1
 
 
 def images_have_overlap(trip, min_ratio, max_ratio):
-  """Checks if images have any overlap."""
-  # the y axis in image coordinates increases from top to bottom.
-  mask1_in_2, mask2_in_1 = trip.mask[0], trip.mask[1]
-  shape = mask1_in_2.shape.as_list()
-  height, width = shape[0], shape[1]
-  ratio1 = tf.reduce_sum(tf.cast(mask1_in_2, tf.float32)) / (height * width)
-  ratio2 = tf.reduce_sum(tf.cast(mask2_in_1, tf.float32)) / (height * width)
-  cond1 = tf.logical_and(
-      tf.less_equal(ratio1, max_ratio), tf.less_equal(ratio2, max_ratio))
-  cond2 = tf.logical_and(
-      tf.greater_equal(ratio1, min_ratio), tf.greater_equal(ratio2, min_ratio))
-  return tf.logical_and(cond1, cond2)
+    """Checks if images have any overlap."""
+    # the y axis in image coordinates increases from top to bottom.
+    mask1_in_2, mask2_in_1 = trip.mask[0], trip.mask[1]
+    shape = mask1_in_2.shape.as_list()
+    height, width = shape[0], shape[1]
+    ratio1 = tf.reduce_sum(tf.cast(mask1_in_2, tf.float32)) / (height * width)
+    ratio2 = tf.reduce_sum(tf.cast(mask2_in_1, tf.float32)) / (height * width)
+    cond1 = tf.logical_and(
+        tf.less_equal(ratio1, max_ratio), tf.less_equal(ratio2, max_ratio))
+    cond2 = tf.logical_and(
+        tf.greater_equal(ratio1, min_ratio), tf.greater_equal(ratio2, min_ratio))
+    return tf.logical_and(cond1, cond2)
+
+
+class MyDataloader_lzq():
+
+    def __init__(self, root_dir="", scenes_list=None, batch_size=1, start_end=None, gt_dir=None):
+        super()
+        self.root_dir = root_dir
+        self.scenes_list = scenes_list
+        self.batch_size = batch_size
+        self.gt_dir = gt_dir
+
+        self.image_paths = []
+        self.pano_paths = []
+        self.depth_paths = []
+
+        self.intrinsic = np.array([[577.8705679012345, 0, 320], [0, 577.8705679012345, 240], [0, 0, 1]])
+
+        scenes = os.listdir(self.root_dir)
+        for scene in scenes:
+            scene_path = os.path.join(self.root_dir, scene)
+            image_dir = os.path.join(scene_path, "ref_frame")
+            pano_dir = os.path.join(scene_path, "pano_gt")
+            depth_dir = os.path.join(scene_path, "depth")
+
+            image_list = sorted(os.listdir(image_dir), key=tmp_key)
+            pano_list = sorted(os.listdir(pano_dir), key=tmp_key)
+            depth_list = sorted(os.listdir(depth_dir), key=tmp_key)
+
+            all_list = list(zip(image_list, pano_list, depth_list))
+            if type(start_end) is tuple:
+                all_list = all_list[int(start_end[0] * len(all_list)):int(start_end[1] * len(all_list))]
+
+            for image, pano, depth in all_list:
+                image_path = os.path.join(image_dir, image)
+                pano_path = os.path.join(pano_dir, pano)
+                depth_path = os.path.join(depth_dir, depth)
+                self.image_paths.append(image_path)
+                self.pano_paths.append(pano_path)
+                self.depth_paths.append(depth_path)
+
+        assert (len(self.image_paths) == len(self.pano_paths))
+        assert (len(self.image_paths) == len(self.depth_paths))
+
+    def __getitem__(self, idx):
+        ref_image = cv2.imread(self.image_paths[idx], cv2.IMREAD_UNCHANGED)[np.newaxis, ...].astype(np.float32)/255.0
+        ref_depth = cv2.imread(self.depth_paths[idx], cv2.CV_16UC1).astype(np.float32)[np.newaxis, ...]/5000.0
+        env_image = cv2.imread(self.pano_paths[idx], cv2.IMREAD_UNCHANGED)[np.newaxis, ...].astype(np.float32)/255.0
+        pose = np.eye(4).astype(np.float32)[np.newaxis, ...]
+        intrinsic = self.intrinsic[np.newaxis, ...].astype(np.float32)
+
+        ans = {}
+        ans["ref_image"] = tf.convert_to_tensor(ref_image, dtype=tf.float32)
+        ans["ref_depth"] = tf.convert_to_tensor(ref_depth, dtype=tf.float32)
+        ans["env_image"] = tf.convert_to_tensor(env_image, dtype=tf.float32)
+        ans["intrinsics"] = tf.convert_to_tensor(intrinsic, dtype=tf.float32)
+        ans["ref_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
+        ans["env_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
+
+        return ans
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def tf_data_generator(self):
+        for i in range(len(self)):
+            yield self.__getitem__(i)
+
+def pose2H(pose):
+    t = pose[-3:]
+    q = pose[:4]
+    q = q[[1,2,3,0]]
+    Rot = R.from_quat(q).as_matrix()
+    H = np.eye(4)
+    H[:3,:3] = Rot
+    H[:3,3] = t
+    return H
+
+def get_mbatch2(id_ref=1, id_src=3, id_env=1):
+    mbatch = {}
+
+    mimage_root = "/storage/user/lhao/hjp/ws_lightshouse/lighthouse_dataset/scene0370_02/ldr"
+    mimage_dirs = sorted(os.listdir(mimage_root), key=tmp_key)
+
+    mref_image_path = os.path.join(mimage_root, mimage_dirs[id_ref])
+
+    mdepth_root = mimage_root.replace("ldr", "depth")
+    mdepth_path = os.path.join(mdepth_root, sorted(os.listdir(mdepth_root), key=tmp_key)[id_ref])
+
+    mintrinsic = np.array([[577.8705679012345, 0, 320], [0, 577.8705679012345, 240], [0, 0, 1]])
+
+    # ref_pose
+    raw = np.loadtxt("/home/wiss/lhao/junpeng/ws_lighthouse/data/setup_ptc/scene0370_02/cam_poses0.txt")
+    mref_pose = raw[id_ref, :]
+    mt = mref_pose[-3:]
+    mq = mref_pose[:4]
+    mq = mq[[1, 2, 3, 0]]
+    mRot = R.from_quat(mq).as_matrix()
+    mH = np.eye(4)
+    mH[:3, :3] = mRot
+    mH[:3, 3] = mt
+
+    # src_images
+    # id_src = 3
+    msrc_image_path = os.path.join(mimage_root, mimage_dirs[id_src])
+
+    # src_pose
+    msrc_pose = raw[id_src, :]
+    mH_src = pose2H(msrc_pose)
+
+    # env_pose
+    # id_env = 99
+    raw_env = np.loadtxt(
+        "/storage/user/lhao/hjp/ws_superpixel/output/test2_300/2frame0370_02/2frame0370_02_control_cam_pose.txt",
+        skiprows=0)
+    menv_pose = raw_env[id_env]
+    mH_env = pose2H(menv_pose)[np.newaxis, ...]
+
+    mbatch["ref_image"] = cv2.imread(mref_image_path, cv2.IMREAD_UNCHANGED)[np.newaxis, ...]
+    mbatch["ref_depth"] = cv2.imread(mdepth_path, cv2.CV_16UC1)[np.newaxis, ...] / 5000.0
+    mbatch["intrinsics"] = mintrinsic[np.newaxis, ...]
+    mbatch["ref_pose"] = mH[np.newaxis, ...]
+    mbatch["src_images"] = cv2.imread(msrc_image_path, cv2.IMREAD_UNCHANGED)[np.newaxis, ...]
+    mbatch["src_poses"] = mH_src[np.newaxis, ..., np.newaxis]
+    mbatch["env_pose"] = mH_env.astype(np.float32)
 
 
 def data_loader(parent_dir='',
@@ -733,170 +865,169 @@ def data_loader(parent_dir='',
                 prefetch_buffer=20,
                 filter_envmap=True,
                 gt_dir=None):
-  """Loads data."""
+    """Loads data."""
 
-  datasets = collections.namedtuple('datasets',
-                                    ['training', 'validation', 'test'])
+    datasets = collections.namedtuple('datasets',
+                                      ['training', 'validation', 'test'])
 
-  test_start = 100 - test_percentage
-  val_start = test_start - validation_percentage
+    test_start = 100 - test_percentage
+    val_start = test_start - validation_percentage
 
-  data_dir = os.path.join(parent_dir, dataset_list[0])
-  scenes = tf.data.Dataset.list_files(os.path.join(data_dir, '*'))
-  for dataset in dataset_list[1:]:
-    data_dir = os.path.join(parent_dir, dataset)
-    scenes = scenes.concatenate(
-        tf.data.Dataset.list_files(os.path.join(data_dir, '*')))
+    data_dir = os.path.join(parent_dir, dataset_list[0])
+    scenes = tf.data.Dataset.list_files(os.path.join(data_dir, '*'))
+    for dataset in dataset_list[1:]:
+        data_dir = os.path.join(parent_dir, dataset)
+        scenes = scenes.concatenate(
+            tf.data.Dataset.list_files(os.path.join(data_dir, '*')))
 
-  sequences = scenes.flat_map(
-      lambda scene_dir: tf.data.Dataset.list_files(scene_dir + '/*')).apply(
-          tf.data.experimental.ignore_errors())
-  if not random_lighting:
-    sequences = sequences.filter(filter_random_lighting)
+    sequences = scenes.flat_map(
+        lambda scene_dir: tf.data.Dataset.list_files(scene_dir + '/*')).apply(
+        tf.data.experimental.ignore_errors())
+    if not random_lighting:
+        sequences = sequences.filter(filter_random_lighting)
 
-  sequences = sequences.filter(filter_seq_length).apply(
-      tf.data.experimental.ignore_errors())
+    sequences = sequences.filter(filter_seq_length).apply(
+        tf.data.experimental.ignore_errors())
 
-  sequences = sequences.map(
-      lambda sequence_dir: load_sequence(sequence_dir, parent_dir, parallelism, gt_dir),
-      num_parallel_calls=parallelism)
+    sequences = sequences.map(
+        lambda sequence_dir: load_sequence(sequence_dir, parent_dir, parallelism, gt_dir),
+        num_parallel_calls=parallelism)
 
-  training = sequences.filter(
-      lambda sequence: sequence.hash_in_range(100, 0, val_start))
-  validation = sequences.filter(
-      lambda sequence: sequence.hash_in_range(100, val_start, test_start))
-  test = sequences.filter(
-      lambda sequence: sequence.hash_in_range(100, test_start, 100))
+    training = sequences.filter(
+        lambda sequence: sequence.hash_in_range(100, 0, val_start))
+    validation = sequences.filter(
+        lambda sequence: sequence.hash_in_range(100, val_start, test_start))
+    test = sequences.filter(
+        lambda sequence: sequence.hash_in_range(100, test_start, 100))
 
-  training = prepare_training_set(training, min_gap, max_gap, min_stride,
-                                  max_stride, batch_size, epochs, min_overlap,
+    training = prepare_training_set(training, min_gap, max_gap, min_stride,
+                                    max_stride, batch_size, epochs, min_overlap,
+                                    max_overlap, min_translation,
+                                    luminence_threshold, depth_threshold,
+                                    parallel_image_reads, prefetch_buffer,
+                                    filter_envmap)
+    validation = prepare_eval_set(validation, min_gap, max_gap, min_stride,
+                                  max_stride, batch_size, min_overlap,
                                   max_overlap, min_translation,
                                   luminence_threshold, depth_threshold,
-                                  parallel_image_reads, prefetch_buffer,
-                                  filter_envmap)
-  validation = prepare_eval_set(validation, min_gap, max_gap, min_stride,
-                                max_stride, batch_size, min_overlap,
-                                max_overlap, min_translation,
-                                luminence_threshold, depth_threshold,
-                                parallel_image_reads, prefetch_buffer)
-  test = prepare_eval_set(test, min_gap, max_gap, min_stride, max_stride,
-                          batch_size, min_overlap, max_overlap, min_translation,
-                          luminence_threshold, depth_threshold,
-                          parallel_image_reads, prefetch_buffer)
+                                  parallel_image_reads, prefetch_buffer)
+    test = prepare_eval_set(test, min_gap, max_gap, min_stride, max_stride,
+                            batch_size, min_overlap, max_overlap, min_translation,
+                            luminence_threshold, depth_threshold,
+                            parallel_image_reads, prefetch_buffer)
 
-  return datasets(training, validation, test)
+    return datasets(training, validation, test)
 
 
 def relative_pose(element):
-  r1_c2w, t1_world = tf.split(element.pose[:, 0], [3, 1], -1)
-  r2_c2w, t2_world = tf.split(element.pose[:, 1], [3, 1], -1)
-  relative_rotation_c2toc1 = tf.matmul(r1_c2w, r2_c2w, transpose_a=True)
-  # [batch, 3, 1]
-  translation_c1 = tf.matmul(r1_c2w, t2_world - t1_world, transpose_a=True)
-  # [batch, 3]
-  translation_c1 = tf.math.l2_normalize(tf.squeeze(translation_c1, -1), axis=-1)
-  return relative_rotation_c2toc1, translation_c1
+    r1_c2w, t1_world = tf.split(element.pose[:, 0], [3, 1], -1)
+    r2_c2w, t2_world = tf.split(element.pose[:, 1], [3, 1], -1)
+    relative_rotation_c2toc1 = tf.matmul(r1_c2w, r2_c2w, transpose_a=True)
+    # [batch, 3, 1]
+    translation_c1 = tf.matmul(r1_c2w, t2_world - t1_world, transpose_a=True)
+    # [batch, 3]
+    translation_c1 = tf.math.l2_normalize(tf.squeeze(translation_c1, -1), axis=-1)
+    return relative_rotation_c2toc1, translation_c1
 
 
 def quaternion_to_matrix(quaternion):
-  quaternion = tf.nn.l2_normalize(quaternion, axis=-1)
-  w, x, y, z = tf.unstack(quaternion, axis=-1)
-  return tf.stack([
-      tf.stack([
-          1 - 2 * y**2 - 2 * z**2, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w
-      ], -1),
-      tf.stack([
-          2 * x * y + 2 * z * w, 1 - 2 * x**2 - 2 * z**2, 2 * y * z - 2 * x * w
-      ], -1),
-      tf.stack([
-          2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x**2 - 2 * y**2
-      ], -1)
-  ], 1)
+    quaternion = tf.nn.l2_normalize(quaternion, axis=-1)
+    w, x, y, z = tf.unstack(quaternion, axis=-1)
+    return tf.stack([
+        tf.stack([
+            1 - 2 * y ** 2 - 2 * z ** 2, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w
+        ], -1),
+        tf.stack([
+            2 * x * y + 2 * z * w, 1 - 2 * x ** 2 - 2 * z ** 2, 2 * y * z - 2 * x * w
+        ], -1),
+        tf.stack([
+            2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x ** 2 - 2 * y ** 2
+        ], -1)
+    ], 1)
 
 
 def from_quaternion(quaternion):
-  """Convert from a quaternion."""
-  quaternion = tf.convert_to_tensor(value=quaternion)
-  w, x, y, z = tf.unstack(quaternion, axis=-1)
-  tx = 2.0 * x
-  ty = 2.0 * y
-  tz = 2.0 * z
-  twx = tx * w
-  twy = ty * w
-  twz = tz * w
-  txx = tx * x
-  txy = ty * x
-  txz = tz * x
-  tyy = ty * y
-  tyz = tz * y
-  tzz = tz * z
-  matrix = tf.stack((1.0 - (tyy + tzz), txy - twz, txz + twy,
-                     txy + twz, 1.0 - (txx + tzz), tyz - twx,
-                     txz - twy, tyz + twx, 1.0 - (txx + tyy)),
-                    axis=-1)  # pyformat: disable
-  output_shape = tf.concat((tf.shape(input=quaternion)[:-1], (3, 3)), axis=-1)
-  return tf.reshape(matrix, shape=output_shape)
+    """Convert from a quaternion."""
+    quaternion = tf.convert_to_tensor(value=quaternion)
+    w, x, y, z = tf.unstack(quaternion, axis=-1)
+    tx = 2.0 * x
+    ty = 2.0 * y
+    tz = 2.0 * z
+    twx = tx * w
+    twy = ty * w
+    twz = tz * w
+    txx = tx * x
+    txy = ty * x
+    txz = tz * x
+    tyy = ty * y
+    tyz = tz * y
+    tzz = tz * z
+    matrix = tf.stack((1.0 - (tyy + tzz), txy - twz, txz + twy,
+                       txy + twz, 1.0 - (txx + tzz), tyz - twx,
+                       txz - twy, tyz + twx, 1.0 - (txx + tyy)),
+                      axis=-1)  # pyformat: disable
+    output_shape = tf.concat((tf.shape(input=quaternion)[:-1], (3, 3)), axis=-1)
+    return tf.reshape(matrix, shape=output_shape)
 
 
 def format_pose(pose_c2w, do_flip=False):
-  flip_val = -1.0 if do_flip else 1.0
-  pose_z_flip = tf.concat([
-      pose_c2w[:, :3, 0:1], pose_c2w[:, :3, 1:2],
-      flip_val * pose_c2w[:, :3, 2:3], pose_c2w[:, :3, 3:]
-  ],
-                          axis=2)
-  filler = np.array([0.0, 0.0, 0.0, 1.0])[tf.newaxis, tf.newaxis, :]
-  return tf.concat([pose_z_flip, filler], axis=1)
+    flip_val = -1.0 if do_flip else 1.0
+    pose_z_flip = tf.concat([
+        pose_c2w[:, :3, 0:1], pose_c2w[:, :3, 1:2],
+        flip_val * pose_c2w[:, :3, 2:3], pose_c2w[:, :3, 3:]
+    ],
+        axis=2)
+    filler = np.array([0.0, 0.0, 0.0, 1.0])[tf.newaxis, tf.newaxis, :]
+    return tf.concat([pose_z_flip, filler], axis=1)
 
 
 def format_inputs(s, height, width, env_height, env_width):
-  """Package an example from the dataset iterator."""
+    """Package an example from the dataset iterator."""
 
-  batch = {}
+    batch = {}
 
-  num_imgs = 3
-  randrange = tf.random.shuffle(tf.range(num_imgs))
-  batch['ordering'] = randrange
+    num_imgs = 3
+    randrange = tf.random.shuffle(tf.range(num_imgs))
+    batch['ordering'] = randrange
 
-  batch['ref_image'] = tf.image.resize_area(
-      s.rgb[:, randrange[0], :, :, :], size=[height, width])
-  batch['ref_pose'] = format_pose(s.pose[:, randrange[0], :, :], do_flip=True)
+    batch['ref_image'] = tf.image.resize_area(
+        s.rgb[:, randrange[0], :, :, :], size=[height, width])
+    batch['ref_pose'] = format_pose(s.pose[:, randrange[0], :, :], do_flip=True)
 
-  ref_depths = s.depth[:, randrange[0], :, :, :]
-  ref_depths = tf.where(
-      tf.equal(ref_depths, 0.0),
-      tf.reduce_max(ref_depths) * tf.ones_like(ref_depths), ref_depths) # max_deoth for 0 depth
-  ref_depths = tf.nn.pool(
-      ref_depths, window_shape=[3, 3], pooling_type='MAX', padding='SAME')
-  batch['ref_depth'] = tf.image.resize_area(
-      ref_depths, size=[height, width])[Ellipsis, 0]
+    ref_depths = s.depth[:, randrange[0], :, :, :]
+    ref_depths = tf.where(
+        tf.equal(ref_depths, 0.0),
+        tf.reduce_max(ref_depths) * tf.ones_like(ref_depths), ref_depths)  # max_deoth for 0 depth
+    ref_depths = tf.nn.pool(
+        ref_depths, window_shape=[3, 3], pooling_type='MAX', padding='SAME')
+    batch['ref_depth'] = tf.image.resize_area(
+        ref_depths, size=[height, width])[Ellipsis, 0]
 
+    src_images = []
+    src_poses = []
+    for i in range(2, num_imgs):
+        src_images.append(
+            tf.image.resize_area(
+                s.rgb[:, randrange[i], :, :, :], size=[height, width]))
+        src_poses.append(format_pose(s.pose[:, randrange[i], :, :], do_flip=True))
+    src_images = tf.concat(src_images, axis=3)
+    src_poses = tf.stack(src_poses, axis=3)
+    batch['src_images'] = src_images
+    batch['src_poses'] = src_poses
 
-  src_images = []
-  src_poses = []
-  for i in range(2, num_imgs):
-    src_images.append(
-        tf.image.resize_area(
-            s.rgb[:, randrange[i], :, :, :], size=[height, width]))
-    src_poses.append(format_pose(s.pose[:, randrange[i], :, :], do_flip=True))
-  src_images = tf.concat(src_images, axis=3)
-  src_poses = tf.stack(src_poses, axis=3)
-  batch['src_images'] = src_images
-  batch['src_poses'] = src_poses
+    intrinsics = tf.cast(s.intrinsics, tf.float32)
+    ds = [s.rgb.shape[2] // height, s.rgb.shape[3] // height]
+    intrinsics = tf.concat([
+        intrinsics[:, 0:1, :] / tf.to_float(ds[1]),
+        intrinsics[:, 1:2, :] / tf.to_float(ds[0]), intrinsics[:, 2:3, :]
+    ],
+        axis=1)
+    batch['intrinsics'] = intrinsics
 
-  intrinsics = tf.cast(s.intrinsics, tf.float32)
-  ds = [s.rgb.shape[2] // height, s.rgb.shape[3] // height]
-  intrinsics = tf.concat([
-      intrinsics[:, 0:1, :] / tf.to_float(ds[1]),
-      intrinsics[:, 1:2, :] / tf.to_float(ds[0]), intrinsics[:, 2:3, :]
-  ],
-                         axis=1)
-  batch['intrinsics'] = intrinsics
+    env_img = tf.image.resize_area(
+        s.pano[:, num_imgs, :, :, :], size=[env_height, env_width])
+    batch['env_image'] = env_img
+    env_pose = format_pose(s.pose[:, num_imgs, :, :], do_flip=True)
+    batch['env_pose'] = env_pose
 
-  env_img = tf.image.resize_area(
-      s.pano[:, num_imgs, :, :, :], size=[env_height, env_width])
-  batch['env_image'] = env_img
-  env_pose = format_pose(s.pose[:, num_imgs, :, :], do_flip=True)
-  batch['env_pose'] = env_pose
-
-  return batch
+    return batch
