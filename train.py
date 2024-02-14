@@ -38,7 +38,7 @@ flags.DEFINE_string(
     "data_dir", default="../../../../../local/lhao/junpeng/interiornet_dataset/", help="InteriorNet dataset directory")
 flags.DEFINE_string(
     "experiment_dir",
-    default="./lighthouse/experiment_dir",
+    default="./lighthouse/exp_orig",
     help="Directory to store experiment summaries and checkpoints")
 
 FLAGS = flags.FLAGS

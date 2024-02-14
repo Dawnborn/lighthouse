@@ -21,7 +21,7 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
-from lighthouse.geometry import sampling
+from geometry import sampling
 
 
 def inv_depths(start_depth, end_depth, num_depths):
@@ -86,7 +86,7 @@ def cam2pixel(cam_coords, proj):
   height = tf.shape(cam_coords)[2]
   width = tf.shape(cam_coords)[3]
   cam_coords = tf.reshape(cam_coords, [batch, 4, -1])
-  unnormalized_pixel_coords = tf.matmul(proj, cam_coords)
+  unnormalized_pixel_coords = tf.matmul(proj, cam_coords) # proj[,4,4] cam_coords[,4,]
   x_u = tf.slice(unnormalized_pixel_coords, [0, 0, 0], [-1, 1, -1])
   y_u = tf.slice(unnormalized_pixel_coords, [0, 1, 0], [-1, 1, -1])
   z_u = tf.slice(unnormalized_pixel_coords, [0, 2, 0], [-1, 1, -1])

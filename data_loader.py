@@ -722,8 +722,8 @@ def images_have_overlap(trip, min_ratio, max_ratio):
 
 class MyDataloader_lzq():
 
-    def __init__(self, root_dir="", scenes_list=None, batch_size=1, start_end=None, gt_dir=None):
-        super()
+    def __init__(self, root_dir="", scenes_list=None, batch_size=1, start_end=None, gt_dir=None, env_width=512, env_height=256):
+        
         self.root_dir = root_dir
         self.scenes_list = scenes_list
         self.batch_size = batch_size
@@ -732,6 +732,9 @@ class MyDataloader_lzq():
         self.image_paths = []
         self.pano_paths = []
         self.depth_paths = []
+
+        self.env_width = env_width
+        self.env_height = env_height
 
         self.intrinsic = np.array([[577.8705679012345, 0, 320], [0, 577.8705679012345, 240], [0, 0, 1]])
 
@@ -762,19 +765,28 @@ class MyDataloader_lzq():
         assert (len(self.image_paths) == len(self.depth_paths))
 
     def __getitem__(self, idx):
-        ref_image = cv2.imread(self.image_paths[idx], cv2.IMREAD_UNCHANGED)[np.newaxis, ...].astype(np.float32)/255.0
-        ref_depth = cv2.imread(self.depth_paths[idx], cv2.CV_16UC1).astype(np.float32)[np.newaxis, ...]/5000.0
-        env_image = cv2.imread(self.pano_paths[idx], cv2.IMREAD_UNCHANGED)[np.newaxis, ...].astype(np.float32)/255.0
-        pose = np.eye(4).astype(np.float32)[np.newaxis, ...]
-        intrinsic = self.intrinsic[np.newaxis, ...].astype(np.float32)
+        ref_image = cv2.imread(self.image_paths[idx], cv2.IMREAD_UNCHANGED).astype(np.float32)/255.0
+        ref_depth = cv2.imread(self.depth_paths[idx], cv2.CV_16UC1).astype(np.float32)/5000.0
+        # env_image = cv2.imread(self.pano_paths[idx], cv2.IMREAD_UNCHANGED)[np.newaxis, ...].astype(np.float32)/255.0
+        env_image = cv2.imread(self.pano_paths[idx], cv2.IMREAD_UNCHANGED)
+        env_image = cv2.resize(env_image,(self.env_width, self.env_height)).astype(np.float32)/255.0
+
+        pose = np.eye(4).astype(np.float32)
+        intrinsic = self.intrinsic.astype(np.float32)
 
         ans = {}
-        ans["ref_image"] = tf.convert_to_tensor(ref_image, dtype=tf.float32)
-        ans["ref_depth"] = tf.convert_to_tensor(ref_depth, dtype=tf.float32)
-        ans["env_image"] = tf.convert_to_tensor(env_image, dtype=tf.float32)
-        ans["intrinsics"] = tf.convert_to_tensor(intrinsic, dtype=tf.float32)
-        ans["ref_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
-        ans["env_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
+        # ans["ref_image"] = tf.convert_to_tensor(ref_image, dtype=tf.float32)
+        # ans["ref_depth"] = tf.convert_to_tensor(ref_depth, dtype=tf.float32)
+        # ans["env_image"] = tf.convert_to_tensor(env_image, dtype=tf.float32)
+        # ans["intrinsics"] = tf.convert_to_tensor(intrinsic, dtype=tf.float32)
+        # ans["ref_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
+        # ans["env_pose"] = tf.convert_to_tensor(pose, dtype=tf.float32)
+        ans["ref_image"] = ref_image
+        ans["ref_depth"] = ref_depth
+        ans["env_image"] = env_image
+        ans["intrinsics"] = intrinsic
+        ans["ref_pose"] = pose
+        ans["env_pose"] = pose
 
         return ans
 
@@ -784,64 +796,6 @@ class MyDataloader_lzq():
     def tf_data_generator(self):
         for i in range(len(self)):
             yield self.__getitem__(i)
-
-def pose2H(pose):
-    t = pose[-3:]
-    q = pose[:4]
-    q = q[[1,2,3,0]]
-    Rot = R.from_quat(q).as_matrix()
-    H = np.eye(4)
-    H[:3,:3] = Rot
-    H[:3,3] = t
-    return H
-
-def get_mbatch2(id_ref=1, id_src=3, id_env=1):
-    mbatch = {}
-
-    mimage_root = "/storage/user/lhao/hjp/ws_lightshouse/lighthouse_dataset/scene0370_02/ldr"
-    mimage_dirs = sorted(os.listdir(mimage_root), key=tmp_key)
-
-    mref_image_path = os.path.join(mimage_root, mimage_dirs[id_ref])
-
-    mdepth_root = mimage_root.replace("ldr", "depth")
-    mdepth_path = os.path.join(mdepth_root, sorted(os.listdir(mdepth_root), key=tmp_key)[id_ref])
-
-    mintrinsic = np.array([[577.8705679012345, 0, 320], [0, 577.8705679012345, 240], [0, 0, 1]])
-
-    # ref_pose
-    raw = np.loadtxt("/home/wiss/lhao/junpeng/ws_lighthouse/data/setup_ptc/scene0370_02/cam_poses0.txt")
-    mref_pose = raw[id_ref, :]
-    mt = mref_pose[-3:]
-    mq = mref_pose[:4]
-    mq = mq[[1, 2, 3, 0]]
-    mRot = R.from_quat(mq).as_matrix()
-    mH = np.eye(4)
-    mH[:3, :3] = mRot
-    mH[:3, 3] = mt
-
-    # src_images
-    # id_src = 3
-    msrc_image_path = os.path.join(mimage_root, mimage_dirs[id_src])
-
-    # src_pose
-    msrc_pose = raw[id_src, :]
-    mH_src = pose2H(msrc_pose)
-
-    # env_pose
-    # id_env = 99
-    raw_env = np.loadtxt(
-        "/storage/user/lhao/hjp/ws_superpixel/output/test2_300/2frame0370_02/2frame0370_02_control_cam_pose.txt",
-        skiprows=0)
-    menv_pose = raw_env[id_env]
-    mH_env = pose2H(menv_pose)[np.newaxis, ...]
-
-    mbatch["ref_image"] = cv2.imread(mref_image_path, cv2.IMREAD_UNCHANGED)[np.newaxis, ...]
-    mbatch["ref_depth"] = cv2.imread(mdepth_path, cv2.CV_16UC1)[np.newaxis, ...] / 5000.0
-    mbatch["intrinsics"] = mintrinsic[np.newaxis, ...]
-    mbatch["ref_pose"] = mH[np.newaxis, ...]
-    mbatch["src_images"] = cv2.imread(msrc_image_path, cv2.IMREAD_UNCHANGED)[np.newaxis, ...]
-    mbatch["src_poses"] = mH_src[np.newaxis, ..., np.newaxis]
-    mbatch["env_pose"] = mH_env.astype(np.float32)
 
 
 def data_loader(parent_dir='',

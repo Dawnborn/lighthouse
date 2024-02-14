@@ -26,8 +26,8 @@ from absl import flags
 import scipy.io as sio
 import tensorflow as tf
 
-import lighthouse.data_loader as loader
-from lighthouse.mlv import MLV
+import data_loader as loader
+from mlv import MLV
 
 flags.DEFINE_string("vgg_model_file", default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/model/imagenet-vgg-verydeep-19.mat", help="VGG weights filename")
 flags.DEFINE_string(
@@ -40,7 +40,7 @@ flags.DEFINE_string(
     help="InteriorNet dataset directory")
 flags.DEFINE_string(
     "experiment_dir",
-    default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_dir",
+    default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_dir3",
     help="Directory to store experiment summaries and checkpoints")
 
 FLAGS = flags.FLAGS
@@ -49,11 +49,11 @@ FLAGS = flags.FLAGS
 batch_size = 1  # implementation only works for batch size 1 currently
 height = 480  # px
 width = 640  # px
-env_height = 512  # px
-env_width = 1024  # px
+env_height = 256  # px
+env_width = 512  # px
 cube_res = 64  # px
-theta_res = 1024  # px
-phi_res = 512  # px
+theta_res = 512  # px
+phi_res = 256  # px
 r_res = 128  # px
 scale_factors = [2, 4, 8, 16]  # try omitting 16 if you have GPU memory issues
 num_planes = 32
@@ -102,11 +102,27 @@ def main(argv):
   root_dir = "/storage/user/lhao/hjp/ws_interiornet_stable/output/setup_ptc_ours"
   start_end = (0, 0.8)
   mydataloader = loader.MyDataloader_lzq(root_dir=root_dir, start_end=start_end)
-  train_iterator = mydataloader.tf_data_generator()
+  dataset = tf.data.Dataset.from_generator(
+      mydataloader.tf_data_generator,
+      output_types={"ref_image": tf.float32, "ref_depth": tf.float32, 
+                    "env_image": tf.float32, "intrinsics": tf.float32,
+                    "ref_pose": tf.float32, "env_pose": tf.float32},
+      output_shapes={"ref_image": tf.TensorShape([height, width, 3]),
+                     "ref_depth": tf.TensorShape([height, width]),
+                     "env_image": tf.TensorShape([env_height, env_width, 3]),
+                     "intrinsics": tf.TensorShape([3, 3]),
+                     "ref_pose": tf.TensorShape([4, 4]),
+                     "env_pose": tf.TensorShape([4, 4])}
+  )
+
+  dataset = dataset.batch(batch_size)
+
+  # dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+  train_iterator = dataset.make_one_shot_iterator()
 
   # Set up input pipeline
-  # s = train_iterator.get_next()
-  s = next(train_iterator)
+  s = train_iterator.get_next()
+
   # batch = loader.format_inputs(s, height, width, env_height, env_width)
   batch = s
   min_depth = tf.reduce_min(batch["ref_depth"])

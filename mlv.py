@@ -24,8 +24,8 @@ import time
 
 import tensorflow as tf
 
-import lighthouse.geometry.projector as pj
-import lighthouse.nets as nets
+import geometry.projector as pj
+import nets as nets
 
 
 class MLV(object):
@@ -582,14 +582,15 @@ class MLV(object):
       global_step: training iteration placeholder
     """
 
-        config = tf.ConfigProto(
-            device_count={'GPU': 0}
-        )
-        config.gpu_options.allow_growth = True
+        # config = tf.ConfigProto(
+        #     device_count={'GPU': 0}
+        # )
+        # config.gpu_options.allow_growth = True
 
         step_start = 1
 
-        with tf.Session(config=config) as sess:
+        # with tf.Session(config=config) as sess:
+        with tf.Session() as sess:
 
             merged = tf.summary.merge_all()
             train_writer = tf.summary.FileWriter(summary_dir, sess.graph)
