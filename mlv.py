@@ -305,24 +305,24 @@ class MLV(object):
                           depth_clip=20.0):
         """Construct the training computation graph.
 
-    Args:
-      inputs: dictionary of tensors (see 'input_data' below) needed for training
-      min_depth: minimum depth for the PSV and MPI planes
-      max_depth: maximum depth for the PSV and MPI planes
-      cube_res: per-side cube resolution
-      theta_res: environment map width
-      phi_res: environment map height
-      r_res: number of radii to use when sampling spheres for rendering
-      scale_factors: downsampling factors of cubes relative to the coarsest
-      num_mpi_planes: number of MPI planes to infer
-      learning_rate: learning rate
-      vgg_model_weights: vgg weights (needed when vgg loss is used)
-      global_step: training iteration
-      depth_clip: maximum depth for coarsest resampled volumes
+        Args:
+        inputs: dictionary of tensors (see 'input_data' below) needed for training
+        min_depth: minimum depth for the PSV and MPI planes
+        max_depth: maximum depth for the PSV and MPI planes
+        cube_res: per-side cube resolution
+        theta_res: environment map width
+        phi_res: environment map height
+        r_res: number of radii to use when sampling spheres for rendering
+        scale_factors: downsampling factors of cubes relative to the coarsest
+        num_mpi_planes: number of MPI planes to infer
+        learning_rate: learning rate
+        vgg_model_weights: vgg weights (needed when vgg loss is used)
+        global_step: training iteration
+        depth_clip: maximum depth for coarsest resampled volumes
 
-    Returns:
-      A train_op to be used for training.
-    """
+        Returns:
+        A train_op to be used for training.
+        """
         with tf.name_scope('setup'):
             psv_planes = pj.inv_depths(min_depth, max_depth, num_mpi_planes)
             mpi_planes = pj.inv_depths(min_depth, max_depth, num_mpi_planes)
@@ -445,7 +445,7 @@ class MLV(object):
                                    vgg_model_weights) / 100.0
 
             # set envmap loss to 0 when only training mpi network (see paper)
-            envmap_loss = tf.where(tf.greater(global_step, 240000), envmap_loss, 0.0)
+            # envmap_loss = tf.where(tf.greater(global_step, 240000), envmap_loss, 0.0)
 
             total_loss = envmap_loss
 
@@ -470,8 +470,8 @@ class MLV(object):
             disc_loss = real_loss + fake_loss
 
             # set adv/disc losses to 0 until end of training
-            adv_loss = tf.where(tf.greater(global_step, 690000), adv_loss, 0.0)
-            disc_loss = tf.where(tf.greater(global_step, 690000), disc_loss, 0.0)
+            # adv_loss = tf.where(tf.greater(global_step, 690000), adv_loss, 0.0)
+            # disc_loss = tf.where(tf.greater(global_step, 690000), disc_loss, 0.0)
 
             tf.summary.scalar('loss_disc', disc_loss)
             tf.summary.scalar('loss_disc_real', real_loss)
@@ -571,21 +571,21 @@ class MLV(object):
               checkpoint_freq, max_steps, global_step):
         """Runs the training procedure.
 
-    Args:
-      train_op: op for training the network
-      load_dir: directory to load checkpoint for continuing training
-      checkpoint_dir: where to save the model checkpoints
-      summary_dir: where to save the tensorboard summaries
-      summary_freq: summary frequency
-      checkpoint_freq: Frequency of model saving
-      max_steps: maximum training steps
-      global_step: training iteration placeholder
-    """
+        Args:
+        train_op: op for training the network
+        load_dir: directory to load checkpoint for continuing training
+        checkpoint_dir: where to save the model checkpoints
+        summary_dir: where to save the tensorboard summaries
+        summary_freq: summary frequency
+        checkpoint_freq: Frequency of model saving
+        max_steps: maximum training steps
+        global_step: training iteration placeholder
+        """
 
-        # config = tf.ConfigProto(
-        #     device_count={'GPU': 0}
-        # )
-        # config.gpu_options.allow_growth = True
+        config = tf.ConfigProto(
+            device_count={'GPU': 0}
+        )
+        config.gpu_options.allow_growth = True
 
         step_start = 1
 
@@ -609,12 +609,16 @@ class MLV(object):
             for step in range(step_start, max_steps + 1):
                 start_time = time.time()
 
-                fetches = {'train': train_op}
+                try:
+                    fetches = {'train': train_op}
 
-                if step % summary_freq == 0:
-                    fetches['summary'] = merged
-
-                results = sess.run(fetches, feed_dict={global_step: step})
+                    if step % summary_freq == 0:
+                        fetches['summary'] = merged
+                    
+                    results = sess.run(fetches, feed_dict={global_step: step})
+                    
+                except tf.errors.OutOfRangeError:
+                    print("训练数据集遍历完成")
 
                 if step % summary_freq == 0:
                     train_writer.add_summary(results['summary'], step)
@@ -631,19 +635,19 @@ class MLV(object):
                              psv_src_poses, planes, intrinsics):
         """Format the network input.
 
-    Args:
-      ref_image: reference source image [batch, height, width, 3]
-      psv_src_images: stack of source images (excluding the ref image) [batch,
-        height, width, 3*(#source)]
-      ref_pose: reference camera-to-world pose (where PSV is constructed)
-        [batch, 4, 4]
-      psv_src_poses: input poses (camera to world) [batch, 4, 4, #source]
-      planes: list of scalar depth values for each plane
-      intrinsics: camera intrinsics [batch, 3, 3]
+        Args:
+        ref_image: reference source image [batch, height, width, 3]
+        psv_src_images: stack of source images (excluding the ref image) [batch,
+            height, width, 3*(#source)]
+        ref_pose: reference camera-to-world pose (where PSV is constructed)
+            [batch, 4, 4]
+        psv_src_poses: input poses (camera to world) [batch, 4, 4, #source]
+        planes: list of scalar depth values for each plane
+        intrinsics: camera intrinsics [batch, 3, 3]
 
-    Returns:
-      net_input: [batch, height, width, #planes, (#source+1)*3]
-    """
+        Returns:
+        net_input: [batch, height, width, #planes, (#source+1)*3]
+        """
 
         batch_size = tf.shape(psv_src_images)[0]
         height = tf.shape(psv_src_images)[1]

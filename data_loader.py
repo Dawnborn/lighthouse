@@ -722,7 +722,7 @@ def images_have_overlap(trip, min_ratio, max_ratio):
 
 class MyDataloader_lzq():
 
-    def __init__(self, root_dir="", scenes_list=None, batch_size=1, start_end=None, gt_dir=None, env_width=512, env_height=256):
+    def __init__(self, root_dir="", scenes_list=None, batch_size=1, start_end=None, gt_dir=None, env_width=512, env_height=256, repeat_epochs=1):
         
         self.root_dir = root_dir
         self.scenes_list = scenes_list
@@ -738,7 +738,7 @@ class MyDataloader_lzq():
 
         self.intrinsic = np.array([[577.8705679012345, 0, 320], [0, 577.8705679012345, 240], [0, 0, 1]])
 
-        scenes = os.listdir(self.root_dir)
+        scenes = self.scenes_list if self.scenes_list else os.listdir(self.root_dir)
         for scene in scenes:
             scene_path = os.path.join(self.root_dir, scene)
             image_dir = os.path.join(scene_path, "ref_frame")
@@ -763,6 +763,13 @@ class MyDataloader_lzq():
 
         assert (len(self.image_paths) == len(self.pano_paths))
         assert (len(self.image_paths) == len(self.depth_paths))
+
+        self.image_paths *= repeat_epochs
+        self.pano_paths *= repeat_epochs
+        self.depth_paths *= repeat_epochs
+
+
+        print("================using a training dataset of length: {}".format(len(self.image_paths)))
 
     def __getitem__(self, idx):
         ref_image = cv2.imread(self.image_paths[idx], cv2.IMREAD_UNCHANGED).astype(np.float32)/255.0

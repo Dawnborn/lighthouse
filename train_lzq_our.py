@@ -37,17 +37,12 @@ flags.DEFINE_string(
     help="Directory for loading checkpoint to continue training")
 flags.DEFINE_string(
     "data_dir",
-    default="/storage/user/lhao/hjp/ws_interiornet_stable/output/setup_ptc_ours2",
-    help="InteriorNet dataset directory")
-flags.DEFINE_string(
-    "data_test_dir",
-    default="/storage/user/lhao/hjp/ws_interiornet_stable/output/setup_ptc_ours2_test",
+    default="/storage/user/lhao/hjp/ws_interiornet_stable/output/setup_ptc_ours",
     help="InteriorNet dataset directory")
 flags.DEFINE_string(
     "experiment_dir",
     # default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_finetune",
-    # default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_finetune_depth4",
-    default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_finetune_ours2_depth8",
+    default="/storage/user/huju/transferred/ws_lighthouse/lighthouse/experiment_finetune_depth4",
     help="Directory to store experiment summaries and checkpoints")
 
 FLAGS = flags.FLAGS
@@ -111,12 +106,8 @@ def main(argv):
 
   # root_dir = "/storage/user/lhao/hjp/ws_interiornet_stable/output/setup_ptc_ours"
   root_dir = FLAGS.data_dir
-  scenes_all = os.listdir(root_dir)
-  scenes_test = os.listdir(FLAGS.data_test_dir)
-  scenes_train = [scene for scene in scenes_all if not scene in scenes_test]
-
-  start_end = (0, 1)
-  mydataloader = loader.MyDataloader_lzq(root_dir=root_dir, scenes_list=scenes_train, start_end=start_end,env_height=env_height,env_width=env_width,repeat_epochs=max_steps)
+  start_end = (0, 0.8)
+  mydataloader = loader.MyDataloader_lzq(root_dir=root_dir, start_end=start_end,env_height=env_height,env_width=env_width,repeat_epochs=max_steps)
   dataset = tf.data.Dataset.from_generator(
       mydataloader.tf_data_generator,
       output_types={"ref_image": tf.float32, "ref_depth": tf.float32, 
