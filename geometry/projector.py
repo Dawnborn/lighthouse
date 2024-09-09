@@ -21,7 +21,7 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
-from lighthouse.geometry import sampling
+from geometry import sampling
 
 
 def inv_depths(start_depth, end_depth, num_depths):

@@ -27,9 +27,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-import lighthouse.geometry.projector as pj
-from lighthouse.mlv import MLV
-import lighthouse.nets as nets
+import geometry.projector as pj
+from mlv import MLV
+import nets as nets
 
 flags.DEFINE_string(
     "checkpoint_dir", default="./model/", help="Directory for loading checkpoint")

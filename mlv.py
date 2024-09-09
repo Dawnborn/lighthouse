@@ -24,8 +24,8 @@ import time
 
 import tensorflow as tf
 
-import lighthouse.geometry.projector as pj
-import lighthouse.nets as nets
+import geometry.projector as pj
+import nets as nets
 
 
 class MLV(object):
